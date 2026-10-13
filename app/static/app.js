@@ -1,4 +1,4 @@
-// 旅行助手前端：调用 /api/v1/chat/stream（SSE），逐字展示回答，并显示意图与引用来源。
+// 旅行助手前端：调用 /api/v1/chat/stream（SSE），流式展示回答（含轻量 Markdown 渲染）。
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
@@ -37,7 +37,72 @@ function addAssistantBubble(placeholder) {
   return { bubble, meta };
 }
 
-// 渲染意图标签与引用来源
+// ---------- 轻量 Markdown 渲染（先转义再拼，避免 XSS） ----------
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderInline(text) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>'
+    );
+}
+
+function renderMarkdown(md) {
+  const lines = escapeHtml(md).split("\n");
+  let html = "";
+  let list = null; // "ul" | "ol" | null
+  const closeList = () => {
+    if (list) {
+      html += `</${list}>`;
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    let m;
+
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      closeList();
+      const level = Math.min(m[1].length + 2, 6);
+      html += `<h${level}>${renderInline(m[2])}</h${level}>`;
+      continue;
+    }
+    if ((m = line.match(/^\s*[-*+]\s+(.*)$/))) {
+      if (list !== "ul") {
+        closeList();
+        html += "<ul>";
+        list = "ul";
+      }
+      html += `<li>${renderInline(m[1])}</li>`;
+      continue;
+    }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) {
+      if (list !== "ol") {
+        closeList();
+        html += "<ol>";
+        list = "ol";
+      }
+      html += `<li>${renderInline(m[1])}</li>`;
+      continue;
+    }
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+    closeList();
+    html += `<p>${renderInline(line)}</p>`;
+  }
+  closeList();
+  return html;
+}
+
+// ---------- 元信息：意图标签 + 引用来源 ----------
 function renderMeta(metaEl, data) {
   metaEl.innerHTML = "";
   const chips = el("div", "chips");
@@ -68,7 +133,9 @@ async function send() {
 
   const { bubble, meta } = addAssistantBubble("连接中…");
   sendBtn.disabled = true;
+  let answer = "";
   let started = false;
+
   try {
     const res = await fetch("/api/v1/chat/stream", {
       method: "POST",
@@ -97,23 +164,23 @@ async function send() {
         } catch {
           continue;
         }
+
         if (event.type === "status") {
           if (!started) bubble.textContent = "…" + event.text;
         } else if (event.type === "delta") {
-          if (!started) {
-            bubble.textContent = "";
-            started = true;
-          }
-          bubble.textContent += event.text;
+          started = true;
+          answer += event.text;
+          bubble.innerHTML = renderMarkdown(answer);
           scrollToBottom();
         } else if (event.type === "done") {
           renderMeta(meta, event);
         } else if (event.type === "error") {
-          bubble.textContent += "\n[错误] " + (event.error || "");
+          answer += "\n\n[错误] " + (event.error || "");
+          bubble.innerHTML = renderMarkdown(answer);
         }
       }
     }
-    if (!started && !bubble.textContent) bubble.textContent = "(空回复)";
+    if (!started) bubble.textContent = "(空回复)";
   } catch (e) {
     bubble.textContent = "请求失败：" + e.message;
   } finally {
