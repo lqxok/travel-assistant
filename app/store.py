@@ -47,6 +47,20 @@ class ChatLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
+class CrawlItem(Base):
+    """爬虫抓取到的条目（供脚本自动回填数据库）。"""
+
+    __tablename__ = "crawl_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), index=True)  # 站点标识
+    city: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    summary: Mapped[str] = mapped_column(String(2000), default="")
+    url: Mapped[str] = mapped_column(String(512), default="")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
 class ChatStore:
     """对话日志仓库：写入 + 聚合统计。所有方法都是异步的。"""
 
@@ -180,6 +194,38 @@ class ChatStore:
             }
             for r in rows
         ]
+
+
+    # ---------- 爬虫数据回填 ----------
+    async def save_crawl_items(self, items: list[dict[str, Any]]) -> int:
+        """批量写入抓取结果，返回写入条数。`city`/`title` 相同视为重复，跳过。"""
+        written = 0
+        async with self._session() as db:
+            existing = set(
+                (row[0], row[1])
+                for row in (await db.execute(select(CrawlItem.city, CrawlItem.title))).all()
+            )
+            for item in items:
+                key = (item.get("city", ""), item.get("title", ""))
+                if key in existing:
+                    continue
+                db.add(
+                    CrawlItem(
+                        source=item.get("source", ""),
+                        city=item.get("city", ""),
+                        title=item.get("title", ""),
+                        summary=item.get("summary", ""),
+                        url=item.get("url", ""),
+                    )
+                )
+                existing.add(key)
+                written += 1
+            await db.commit()
+        return written
+
+    async def crawl_count(self) -> int:
+        async with self._session() as db:
+            return (await db.execute(select(func.count()).select_from(CrawlItem))).scalar_one()
 
 
 def _latency_summary(values: list[int]) -> dict[str, float]:

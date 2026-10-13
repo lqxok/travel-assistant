@@ -60,6 +60,9 @@ travel-assistant/
 │   ├── json_utils.py    # 稳健解析模型返回的 JSON
 │   └── static/          # 前端（聊天页 + admin.html 看板）
 ├── data/knowledge.json  # 知识库语料
+├── scripts/
+│   ├── crawler.py       # Playwright 爬虫：抓公开城市信息并回填数据库
+│   └── requirements-crawler.txt
 ├── tests/               # pytest 测试
 ├── requirements.txt
 └── .env.example
@@ -185,6 +188,25 @@ python -m evals.run_evals --limit 3            # 在线部分每组只跑 3 条�
 | 延迟 mean / p50 / p95 | 是 | 端到端耗时 |
 
 结果写入 `evals/report.json`。CI 会跑**离线评测**；`Evals` 工作流可手动触发**完整评测**（需配置 Secrets）。
+
+## 自动化爬虫（RPA）
+
+`scripts/crawler.py` 用 **Playwright** 抓取公开的城市旅行信息并**自动回填数据库**，
+演示浏览器自动化 + 反爬应对 + 数据入库的完整闭环（依赖单独放置，不装进主镜像）：
+
+```bash
+pip install -r scripts/requirements-crawler.txt
+playwright install chromium
+python -m scripts.crawler --cities 京都 清迈 巴厘岛        # 抓取并入库
+python -m scripts.crawler --cities 京都 --notify          # 抓完推送飞书
+```
+
+- **反爬应对**：伪装 UA / 语言头、请求间随机延迟、失败重试、遵守 `robots.txt`；
+- **结构化抽取**：浏览器渲染后取正文，压缩空白；
+- **自动回填**：经 `app.store` 写入 `crawl_items` 表（MySQL / SQLite），按 `城市+标题` 去重；
+- **飞书通知**：配置 `FEISHU_WEBHOOK` 后推送本轮结果。
+
+> 目标站点在脚本内可配置；请遵守目标站点条款与 robots.txt，仅用于学习。
 
 ## 部署（Docker）
 
