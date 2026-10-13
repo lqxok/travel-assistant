@@ -9,8 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# PIP_INDEX_URL 可在构建时指定（国内服务器建议用镜像源加速）
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN pip install --no-cache-dir --upgrade pip --index-url ${PIP_INDEX_URL} \
+    && pip install --no-cache-dir -r requirements.txt --index-url ${PIP_INDEX_URL}
 
 COPY app ./app
 COPY data ./data
