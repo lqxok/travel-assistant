@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -67,6 +68,21 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+def require_token(request: Request) -> None:
+    """配置了 ACCESS_TOKEN 时校验访问口令（请求头 X-Access-Token 或 query ?token=）。"""
+    settings: Settings = request.app.state.settings
+    expected = settings.access_token
+    if not expected:
+        return  # 未配置口令 → 不校验
+    provided = request.headers.get("x-access-token") or request.query_params.get("token") or ""
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="访问口令无效或未提供")
+
+
+# 需要口令的接口（健康检查保持公开，供容器健康检查使用）
+guard = [Depends(require_token)]
+
+
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
@@ -81,10 +97,11 @@ async def health(request: Request) -> dict[str, Any]:
         "model": settings.model,
         "kb_size": agent._kb.size,
         "profile_users": agent.profile_user_count,
+        "auth_required": bool(settings.access_token),
     }
 
 
-@app.post("/api/v1/chat", response_model=ChatResponse, tags=["chat"])
+@app.post("/api/v1/chat", response_model=ChatResponse, tags=["chat"], dependencies=guard)
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     """单轮对话：交给编排器处理，返回回答、意图与引用来源。"""
     agent: TravelAgent = request.app.state.agent
@@ -108,7 +125,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     )
 
 
-@app.post("/api/v1/chat/stream", tags=["chat"])
+@app.post("/api/v1/chat/stream", tags=["chat"], dependencies=guard)
 async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
     """流式对话：SSE 事件为 status / delta / done / error。"""
     agent: TravelAgent = request.app.state.agent
@@ -126,7 +143,7 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-@app.delete("/api/v1/profile/{user_id}", tags=["profile"])
+@app.delete("/api/v1/profile/{user_id}", tags=["profile"], dependencies=guard)
 async def clear_profile(user_id: str, request: Request) -> dict[str, str]:
     """清除某个用户的长期记忆。"""
     agent: TravelAgent = request.app.state.agent

@@ -75,6 +75,10 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | `OPENAI_BASE_URL` | 接口地址（如 `https://api.deepseek.com`） |
 | `OPENAI_MODEL` | 模型名 |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 生成参数 |
+| `ACCESS_TOKEN` | 访问口令；填了之后调用接口需带请求头 `X-Access-Token`（留空=不校验） |
+
+> 对外部署时建议设置 `ACCESS_TOKEN`，否则任何人拿到地址都能免费用你的模型额度。
+> 前端顶部有「口令」输入框；也可用 `http://<host>/?token=xxx` 打开一次（会自动记住）。
 
 ## API
 

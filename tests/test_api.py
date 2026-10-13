@@ -43,3 +43,26 @@ def test_chat_stream_endpoint(fake_llm_factory):
 
         assert "data:" in body
         assert '"type": "done"' in body
+
+
+def test_token_required_when_configured(fake_llm_factory):
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(["你好"]), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(original, access_token="s3cret")
+        try:
+            # 未带口令 → 401
+            assert client.post("/api/v1/chat", json={"message": "你好呀"}).status_code == 401
+            # 带对口令 → 200
+            ok = client.post(
+                "/api/v1/chat",
+                headers={"X-Access-Token": "s3cret"},
+                json={"message": "你好呀"},
+            )
+            assert ok.status_code == 200
+            # 健康检查保持公开（供容器健康检查）
+            assert client.get("/api/v1/health").status_code == 200
+        finally:
+            app.state.settings = original

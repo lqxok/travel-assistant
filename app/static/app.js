@@ -5,6 +5,23 @@ const sendBtn = document.getElementById("send");
 const streamToggle = document.getElementById("streamToggle");
 const newSessionBtn = document.getElementById("newSession");
 const clearMemoryBtn = document.getElementById("clearMemory");
+const tokenInput = document.getElementById("tokenInput");
+
+// 访问口令：可用 ?token=xxx 打开一次（会自动记住并清理地址栏）
+const urlToken = new URLSearchParams(location.search).get("token");
+if (urlToken) {
+  localStorage.setItem("travel_token", urlToken);
+  history.replaceState(null, "", location.pathname);
+}
+tokenInput.value = localStorage.getItem("travel_token") || "";
+tokenInput.addEventListener("change", () => {
+  localStorage.setItem("travel_token", tokenInput.value.trim());
+});
+
+function authHeaders() {
+  const token = (tokenInput.value || "").trim();
+  return token ? { "X-Access-Token": token } : {};
+}
 
 // 会话 id：同一页面持续复用以获得多轮记忆
 let sessionId = newId();
@@ -147,9 +164,10 @@ function renderMeta(metaEl, data) {
 async function sendOnce(text, bubble, meta) {
   const res = await fetch("/api/v1/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ message: text, session_id: sessionId, user_id: userId }),
   });
+  if (res.status === 401) throw new Error("口令错误或未填写（请在顶部「口令」里填写）");
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || "HTTP " + res.status);
@@ -163,9 +181,10 @@ async function sendOnce(text, bubble, meta) {
 async function sendStream(text, bubble, meta) {
   const res = await fetch("/api/v1/chat/stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ message: text, session_id: sessionId, user_id: userId }),
   });
+  if (res.status === 401) throw new Error("口令错误或未填写（请在顶部「口令」里填写）");
   if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
 
   const reader = res.body.getReader();
@@ -258,7 +277,10 @@ clearMemoryBtn.addEventListener("click", async () => {
   const msg = el("div", "msg assistant");
   const bubble = el("div", "bubble");
   try {
-    await fetch("/api/v1/profile/" + encodeURIComponent(userId), { method: "DELETE" });
+    await fetch("/api/v1/profile/" + encodeURIComponent(userId), {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
     bubble.textContent = "已清除长期记忆，之后我不会再记得你之前告诉我的偏好。";
   } catch (e) {
     bubble.textContent = "清除失败：" + e.message;

@@ -23,6 +23,7 @@ class Settings:
     temperature: float
     max_tokens: int
     request_timeout: float
+    access_token: str = ""
 
     @property
     def has_api_key(self) -> bool:
@@ -40,4 +41,5 @@ def load_settings() -> Settings:
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
         max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
         request_timeout=float(os.getenv("LLM_TIMEOUT", "120")),
+        access_token=os.getenv("ACCESS_TOKEN", "").strip(),
     )
