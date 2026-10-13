@@ -5,6 +5,7 @@
     ├ budget / trip_planning → 抽参数 → 调工具 → 让模型润色成自然语言
     └ 其它（guide / transport / stay / general） → 本地检索 → 有据生成（回传引用来源）
 
+多轮：传入相同的 `session_id` 时，会把该会话的历史对话一并带给模型。
 对外提供两种用法：
   - `handle()`  一次性返回完整回答
   - `astream()` 逐块产出（status / delta / done），供 SSE 前端使用
@@ -22,6 +23,7 @@ from pydantic import ValidationError
 from app.intents import Intent, IntentRecognizer, IntentResult
 from app.json_utils import extract_json
 from app.llm import LLMClient, Message
+from app.memory import ConversationMemory
 from app.rag import Hit, KnowledgeBase
 from app.tools import TOOLS, invoke
 
@@ -75,6 +77,7 @@ class _Prepared:
     stage: str = "生成回答"
     system: str = ""
     user: str = ""
+    history: list[Message] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     tool_result: dict[str, Any] | None = None
     fixed_reply: str | None = None
@@ -83,20 +86,28 @@ class _Prepared:
 class TravelAgent:
     """旅行助手编排器。"""
 
-    def __init__(self, llm: LLMClient, knowledge_base: KnowledgeBase) -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        knowledge_base: KnowledgeBase,
+        memory: ConversationMemory | None = None,
+    ) -> None:
         self._llm = llm
         self._kb = knowledge_base
+        self._memory = memory or ConversationMemory()
         self._intents = IntentRecognizer(llm)
 
     # ---------- 对外：非流式 ----------
-    async def handle(self, message: str) -> AgentReply:
-        prepared = await self._prepare(message)
+    async def handle(self, message: str, *, session_id: str | None = None) -> AgentReply:
+        prepared = await self._prepare(message, self._history(session_id))
         if prepared.fixed_reply is not None:
             reply = prepared.fixed_reply
         else:
             reply = await self._llm.complete(
-                [Message(role="user", content=prepared.user)], system=prepared.system
+                [*prepared.history, Message(role="user", content=prepared.user)],
+                system=prepared.system,
             )
+        self._remember(session_id, message, reply)
         return AgentReply(
             reply,
             prepared.intent,
@@ -107,18 +118,26 @@ class TravelAgent:
         )
 
     # ---------- 对外：流式 ----------
-    async def astream(self, message: str) -> AsyncIterator[dict[str, Any]]:
-        prepared = await self._prepare(message)
+    async def astream(
+        self, message: str, *, session_id: str | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
+        prepared = await self._prepare(message, self._history(session_id))
         yield {"type": "status", "text": prepared.stage}
 
         if prepared.fixed_reply is not None:
-            yield {"type": "delta", "text": prepared.fixed_reply}
+            full = prepared.fixed_reply
+            yield {"type": "delta", "text": full}
         else:
+            parts: list[str] = []
             async for piece in self._llm.stream(
-                [Message(role="user", content=prepared.user)], system=prepared.system
+                [*prepared.history, Message(role="user", content=prepared.user)],
+                system=prepared.system,
             ):
+                parts.append(piece)
                 yield {"type": "delta", "text": piece}
+            full = "".join(parts)
 
+        self._remember(session_id, message, full)
         yield {
             "type": "done",
             "intent": prepared.intent.value,
@@ -128,21 +147,32 @@ class TravelAgent:
             "tool_result": prepared.tool_result,
         }
 
-    # ---------- 内部：决定走哪条分支 ----------
-    async def _prepare(self, message: str) -> _Prepared:
+    # ---------- 内部 ----------
+    def _history(self, session_id: str | None) -> list[Message]:
+        return self._memory.history(session_id) if session_id else []
+
+    def _remember(self, session_id: str | None, user_text: str, assistant_text: str) -> None:
+        if session_id and assistant_text:
+            self._memory.append(session_id, user_text, assistant_text)
+
+    async def _prepare(self, message: str, history: list[Message]) -> _Prepared:
         ir = await self._intents.recognize(message)
         tool_name = _TOOL_FOR_INTENT.get(ir.intent)
         if tool_name is not None:
-            return await self._prepare_tool(message, ir, tool_name)
-        return await self._prepare_rag(message, ir)
+            return await self._prepare_tool(message, ir, tool_name, history)
+        return await self._prepare_rag(message, ir, history)
 
-    async def _prepare_tool(self, message: str, ir: IntentResult, tool_name: str) -> _Prepared:
+    async def _prepare_tool(
+        self, message: str, ir: IntentResult, tool_name: str, history: list[Message]
+    ) -> _Prepared:
         spec = TOOLS[tool_name]
         params = await self._extract_params(
-            message, spec.name, spec.params_model.model_json_schema()
+            message, spec.name, spec.params_model.model_json_schema(), history
         )
         if params is None:
-            return _Prepared(ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message)
+            return _Prepared(
+                ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message, history=history
+            )
 
         try:
             result = invoke(tool_name, **params)
@@ -157,9 +187,14 @@ class TravelAgent:
                 ir.intent, ir.confidence, ir.source, fixed_reply=self._ask_for_missing(missing)
             )
         except Exception:  # noqa: BLE001 —— 其它异常退化为直接回答
-            return _Prepared(ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message)
+            return _Prepared(
+                ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message, history=history
+            )
 
-        user = f"用户问题：{message}\n工具：{tool_name}\n结果(JSON)：{json.dumps(result, ensure_ascii=False)}"
+        user = (
+            f"用户问题：{message}\n工具：{tool_name}\n"
+            f"结果(JSON)：{json.dumps(result, ensure_ascii=False)}"
+        )
         return _Prepared(
             ir.intent,
             ir.confidence,
@@ -167,17 +202,26 @@ class TravelAgent:
             stage="整理结果",
             system=RENDER_SYSTEM,
             user=user,
+            history=history,
             tool_result=result,
         )
 
-    async def _prepare_rag(self, message: str, ir: IntentResult) -> _Prepared:
+    async def _prepare_rag(
+        self, message: str, ir: IntentResult, history: list[Message]
+    ) -> _Prepared:
         hits: list[Hit] = await self._kb.retrieve(message, intent=ir.intent.value, top_k=3)
         citations = [
             {"doc_id": h.doc_id, "title": h.title, "score": round(h.score, 3)} for h in hits
         ]
         if not hits:
             return _Prepared(
-                ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message, citations=citations
+                ir.intent,
+                ir.confidence,
+                ir.source,
+                system=BASE_SYSTEM,
+                user=message,
+                history=history,
+                citations=citations,
             )
         context = "\n\n".join(f"[{i}] {h.title}\n{h.text}" for i, h in enumerate(hits, 1))
         return _Prepared(
@@ -187,11 +231,16 @@ class TravelAgent:
             stage="检索资料",
             system=RAG_SYSTEM,
             user=f"参考资料：\n{context}\n\n用户问题：{message}",
+            history=history,
             citations=citations,
         )
 
     async def _extract_params(
-        self, message: str, tool_name: str, schema: dict[str, Any]
+        self,
+        message: str,
+        tool_name: str,
+        schema: dict[str, Any],
+        history: list[Message],
     ) -> dict[str, Any] | None:
         """让模型从自然语言里抽出工具所需参数。"""
         system = (
@@ -201,7 +250,7 @@ class TravelAgent:
         )
         try:
             raw = await self._llm.complete(
-                [Message(role="user", content=message)],
+                [*history, Message(role="user", content=message)],
                 system=system,
                 temperature=0.0,
                 max_tokens=300,

@@ -73,3 +73,50 @@ async def test_astream_fixed_reply_when_param_missing(fake_llm_factory):
     assert events[-1]["type"] == "done"
     text = "".join(e["text"] for e in events if e["type"] == "delta")
     assert "出发城市" in text
+
+
+async def test_multi_turn_includes_history(fake_llm_factory):
+    llm = fake_llm_factory(
+        [
+            '{"origin": "北京", "destination": "成都", "days": 3}',
+            "好的，3 天行程如下。",
+            '{"origin": "北京", "destination": "成都", "days": 5}',
+            "好的，5 天行程如下。",
+        ]
+    )
+    agent = TravelAgent(llm, _kb())
+    await agent.handle("帮我规划从北京去成都的三天行程", session_id="s1")
+    await agent.handle("帮我规划从北京去成都的五天行程", session_id="s1")
+
+    joined = " ".join(m.content for m in llm.calls[-1]["messages"])
+    assert "三天" in joined  # 第二轮带上了第一轮的历史
+
+
+async def test_without_session_id_no_history(fake_llm_factory):
+    llm = fake_llm_factory(
+        [
+            '{"origin": "北京", "destination": "成都", "days": 3}',
+            "好的。",
+            '{"origin": "北京", "destination": "成都", "days": 5}',
+            "好的。",
+        ]
+    )
+    agent = TravelAgent(llm, _kb())
+    await agent.handle("帮我规划从北京去成都的三天行程")
+    await agent.handle("帮我规划从北京去成都的五天行程")
+
+    joined = " ".join(m.content for m in llm.calls[-1]["messages"])
+    assert "三天" not in joined  # 没传 session_id → 不带历史
+
+
+async def test_astream_records_memory(fake_llm_factory):
+    llm = fake_llm_factory(["你好呀", "第二次回答"])
+    agent = TravelAgent(llm, _kb())
+
+    async for _ in agent.astream("你好", session_id="s9"):
+        pass
+
+    history = agent._memory.history("s9")
+    assert len(history) == 2
+    assert history[0].content == "你好"
+    assert history[1].role == "assistant"

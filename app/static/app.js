@@ -2,6 +2,17 @@
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
+const streamToggle = document.getElementById("streamToggle");
+const newSessionBtn = document.getElementById("newSession");
+
+// 会话 id：同一页面持续复用以获得多轮记忆
+let sessionId = newId();
+
+function newId() {
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : "sess-" + Math.random().toString(36).slice(2) + Date.now();
+}
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -124,6 +135,72 @@ function renderMeta(metaEl, data) {
   }
 }
 
+// 非流式：一次拿完整回答
+async function sendOnce(text, bubble, meta) {
+  const res = await fetch("/api/v1/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, session_id: sessionId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "HTTP " + res.status);
+  }
+  const data = await res.json();
+  bubble.innerHTML = renderMarkdown(data.reply || "(空回复)");
+  renderMeta(meta, data);
+}
+
+// 流式：SSE 逐字返回
+async function sendStream(text, bubble, meta) {
+  const res = await fetch("/api/v1/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, session_id: sessionId }),
+  });
+  if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let answer = "";
+  let started = false;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sep;
+    while ((sep = buffer.indexOf("\n\n")) >= 0) {
+      const raw = buffer.slice(0, sep).trim();
+      buffer = buffer.slice(sep + 2);
+      if (!raw.startsWith("data:")) continue;
+      let event;
+      try {
+        event = JSON.parse(raw.slice(5).trim());
+      } catch {
+        continue;
+      }
+
+      if (event.type === "status") {
+        if (!started) bubble.textContent = "…" + event.text;
+      } else if (event.type === "delta") {
+        started = true;
+        answer += event.text;
+        bubble.innerHTML = renderMarkdown(answer);
+        scrollToBottom();
+      } else if (event.type === "done") {
+        renderMeta(meta, event);
+      } else if (event.type === "error") {
+        answer += "\n\n[错误] " + (event.error || "");
+        bubble.innerHTML = renderMarkdown(answer);
+      }
+    }
+  }
+  if (!started) bubble.textContent = "(空回复)";
+}
+
 async function send() {
   const text = input.value.trim();
   if (!text) return;
@@ -133,54 +210,12 @@ async function send() {
 
   const { bubble, meta } = addAssistantBubble("连接中…");
   sendBtn.disabled = true;
-  let answer = "";
-  let started = false;
-
   try {
-    const res = await fetch("/api/v1/chat/stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    });
-    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let sep;
-      while ((sep = buffer.indexOf("\n\n")) >= 0) {
-        const raw = buffer.slice(0, sep).trim();
-        buffer = buffer.slice(sep + 2);
-        if (!raw.startsWith("data:")) continue;
-        let event;
-        try {
-          event = JSON.parse(raw.slice(5).trim());
-        } catch {
-          continue;
-        }
-
-        if (event.type === "status") {
-          if (!started) bubble.textContent = "…" + event.text;
-        } else if (event.type === "delta") {
-          started = true;
-          answer += event.text;
-          bubble.innerHTML = renderMarkdown(answer);
-          scrollToBottom();
-        } else if (event.type === "done") {
-          renderMeta(meta, event);
-        } else if (event.type === "error") {
-          answer += "\n\n[错误] " + (event.error || "");
-          bubble.innerHTML = renderMarkdown(answer);
-        }
-      }
+    if (streamToggle.checked) {
+      await sendStream(text, bubble, meta);
+    } else {
+      await sendOnce(text, bubble, meta);
     }
-    if (!started) bubble.textContent = "(空回复)";
   } catch (e) {
     bubble.textContent = "请求失败：" + e.message;
   } finally {
@@ -197,3 +232,15 @@ input.addEventListener("keydown", (e) => {
   }
 });
 input.addEventListener("input", autosize);
+
+newSessionBtn.addEventListener("click", () => {
+  sessionId = newId();
+  chat.innerHTML = "";
+  const msg = el("div", "msg assistant");
+  const bubble = el("div", "bubble");
+  bubble.innerHTML =
+    "已开启新会话。可以帮你规划行程、估算花费、查签证与出行攻略。<br />" +
+    "试试问：<b>去日本旅游要准备什么签证材料</b>";
+  msg.appendChild(bubble);
+  chat.appendChild(msg);
+});

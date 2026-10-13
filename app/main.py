@@ -82,7 +82,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     agent: TravelAgent = request.app.state.agent
     llm: LLMClient = request.app.state.llm
     try:
-        result = await agent.handle(body.message)
+        result = await agent.handle(body.message, session_id=body.session_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"处理失败：{exc}") from exc
 
@@ -104,7 +104,7 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
 
     async def event_stream() -> AsyncIterator[str]:
         try:
-            async for event in agent.astream(body.message):
+            async for event in agent.astream(body.message, session_id=body.session_id):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
             error = {"type": "error", "error": str(exc)}
