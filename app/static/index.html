@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>旅行助手</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <span class="logo">🧭</span>
+      <div>
+        <div class="title">旅行助手</div>
+        <div class="subtitle">行程规划 · 预算估算 · 签证攻略</div>
+      </div>
+    </header>
+
+    <main id="chat" class="chat">
+      <div class="msg assistant">
+        <div class="bubble">
+          你好，我是旅行助手。可以帮你规划行程、估算花费、查签证与出行攻略。<br />
+          试试问：<b>去日本旅游要准备什么签证材料</b>
+        </div>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <textarea id="input" rows="1" placeholder="输入你的旅行问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send" class="primary">发送</button>
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

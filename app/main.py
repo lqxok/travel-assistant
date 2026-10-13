@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.agent import TravelAgent
@@ -55,6 +58,14 @@ app = FastAPI(
     description="个人旅行助手：对话 → 意图路由 → 本地检索 / 旅行工具。",
     lifespan=lifespan,
 )
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 @app.get("/api/v1/health", tags=["system"])
