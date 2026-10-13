@@ -1,5 +1,0 @@
-# Playwright 爬虫的独立依赖（不装进主镜像，避免拖大体积）
-# 安装：
-#     pip install -r scripts/requirements-crawler.txt
-#     playwright install chromium
-playwright>=1.44
