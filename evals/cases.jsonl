@@ -15,7 +15,7 @@
 
 {"id": "retrieval-01", "type": "retrieval", "input": "签证需要准备什么材料", "expected_doc": "kb-visa"}
 {"id": "retrieval-02", "type": "retrieval", "input": "护照有效期有什么要求", "expected_doc": "kb-visa"}
-{"id": "retrieval-03", "type": "retrieval", "input": "旅行保险怎么买", "expected_doc": "kb-safety"}
+{"id": "retrieval-03", "type": "retrieval", "input": "旅行保险怎么买", "expected_doc": "kb-insurance"}
 {"id": "retrieval-04", "type": "retrieval", "input": "行李怎么打包", "expected_doc": "kb-packing"}
 {"id": "retrieval-05", "type": "retrieval", "input": "行程怎么排比较合理", "expected_doc": "kb-route"}
 {"id": "retrieval-06", "type": "retrieval", "input": "坐飞机还是高铁", "expected_doc": "kb-transport"}
@@ -23,6 +23,16 @@
 {"id": "retrieval-08", "type": "retrieval", "input": "当地美食怎么挑", "expected_doc": "kb-food"}
 {"id": "retrieval-09", "type": "retrieval", "input": "花费怎么分配", "expected_doc": "kb-budget"}
 {"id": "retrieval-10", "type": "retrieval", "input": "旺季订票要注意什么", "expected_doc": "kb-transport"}
+{"id": "retrieval-11", "type": "retrieval", "input": "申根签证怎么申请", "expected_doc": "kb-visa-schengen"}
+{"id": "retrieval-12", "type": "retrieval", "input": "潜水浮潜要注意什么", "expected_doc": "kb-dest-island"}
+{"id": "retrieval-13", "type": "retrieval", "input": "高原反应怎么办", "expected_doc": "kb-health-altitude"}
+{"id": "retrieval-14", "type": "retrieval", "input": "购物怎么退税", "expected_doc": "kb-tax-refund"}
+{"id": "retrieval-15", "type": "retrieval", "input": "出境上网买哪种卡", "expected_doc": "kb-sim"}
+{"id": "retrieval-16", "type": "retrieval", "input": "怎么找本地人吃的餐馆", "expected_doc": "kb-food-local"}
+{"id": "retrieval-17", "type": "retrieval", "input": "境外租车要注意什么", "expected_doc": "kb-rental"}
+{"id": "retrieval-18", "type": "retrieval", "input": "带老人出行注意什么", "expected_doc": "kb-route-elder"}
+{"id": "retrieval-19", "type": "retrieval", "input": "出发前要检查哪些东西", "expected_doc": "kb-general-checklist"}
+{"id": "retrieval-20", "type": "retrieval", "input": "食物过敏怎么跟店家说", "expected_doc": "kb-food-allergy"}
 
 {"id": "tool-01", "type": "tool", "input": "两个人去日本玩5天大概多少钱", "expected_tool": "estimate_budget"}
 {"id": "tool-02", "type": "tool", "input": "五天大概要多少预算", "expected_tool": "estimate_budget"}
