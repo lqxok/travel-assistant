@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.agent import TravelAgent
 from app.config import Settings, load_settings
-from app.intents import IntentRecognizer
-from app.llm import LLMClient, Message
+from app.llm import LLMClient
+from app.rag import KnowledgeBase
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-
-SYSTEM_PROMPT = (
-    "你是「旅行助手」，帮助用户规划行程、估算预算、解答签证与出行问题。"
-    "回答要具体、可执行；涉及价格、签证等时效性信息时，提醒用户以官方最新信息为准，"
-    "不确定的内容不要编造。"
 )
 
 
@@ -35,53 +31,56 @@ class ChatResponse(BaseModel):
     intent: str
     confidence: float
     source: str
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    tool_result: dict[str, Any] | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = load_settings()
     llm = LLMClient(settings)
+    knowledge_base = KnowledgeBase.from_json()
     app.state.settings = settings
     app.state.llm = llm
-    app.state.intents = IntentRecognizer(llm)
-    logging.getLogger(__name__).info("旅行助手启动，模型：%s", settings.model)
+    app.state.agent = TravelAgent(llm, knowledge_base)
+    logging.getLogger(__name__).info(
+        "旅行助手启动，模型：%s，知识库：%d 条", settings.model, knowledge_base.size
+    )
     yield
 
 
 app = FastAPI(
     title="旅行助手 API",
     version="0.1.0",
-    description="个人旅行助手：对话 → 行程规划 / 预算估算 / 攻略问答。",
+    description="个人旅行助手：对话 → 意图路由 → 本地检索 / 旅行工具。",
     lifespan=lifespan,
 )
 
 
 @app.get("/api/v1/health", tags=["system"])
-async def health(request: Request) -> dict[str, str]:
+async def health(request: Request) -> dict[str, Any]:
     settings: Settings = request.app.state.settings
-    return {"status": "ok", "model": settings.model}
+    return {"status": "ok", "model": settings.model, "kb_size": request.app.state.agent._kb.size}
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse, tags=["chat"])
 async def chat(body: ChatRequest, request: Request) -> ChatResponse:
-    """单轮对话：先识别意图，再交给模型生成回答。"""
+    """单轮对话：交给编排器处理，返回回答、意图与引用来源。"""
+    agent: TravelAgent = request.app.state.agent
     llm: LLMClient = request.app.state.llm
-    recognizer: IntentRecognizer = request.app.state.intents
-
-    result = await recognizer.recognize(body.message)
     try:
-        reply = await llm.complete(
-            [Message(role="user", content=body.message)], system=SYSTEM_PROMPT
-        )
+        result = await agent.handle(body.message)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"模型调用失败：{exc}") from exc
+        raise HTTPException(status_code=502, detail=f"处理失败：{exc}") from exc
 
     return ChatResponse(
-        reply=reply,
+        reply=result.reply,
         model=llm.model,
         intent=result.intent.value,
         confidence=round(result.confidence, 3),
         source=result.source,
+        citations=result.citations,
+        tool_result=result.tool_result,
     )
 
 

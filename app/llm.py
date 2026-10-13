@@ -67,7 +67,11 @@ class LLMClient:
                     temperature=self._temperature if temperature is None else temperature,
                     max_tokens=self._max_tokens if max_tokens is None else max_tokens,
                 )
-                return resp.choices[0].message.content or ""
+                content = resp.choices[0].message.content or ""
+                if not content.strip():
+                    # 推理型模型有时会把预算耗在思考上导致正文为空，按失败重试
+                    raise RuntimeError("模型返回了空内容")
+                return content
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 logger.warning("LLM 调用失败（第 %d 次）：%s", attempt + 1, exc)

@@ -38,6 +38,6 @@ def load_settings() -> Settings:
         base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
-        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
+        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
         request_timeout=float(os.getenv("LLM_TIMEOUT", "120")),
     )

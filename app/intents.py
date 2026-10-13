@@ -7,11 +7,11 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from enum import Enum
 
+from app.json_utils import extract_json
 from app.llm import LLMClient, Message
 
 
@@ -110,26 +110,6 @@ class RuleEngine:
         return best, confidence
 
 
-_JSON_BLOCK = re.compile(r"\{[\s\S]*\}")
-
-
-def _extract_json(raw: str) -> dict[str, object]:
-    raw = raw.strip()
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
-    match = _JSON_BLOCK.search(raw)
-    if not match:
-        raise json.JSONDecodeError("no json object", raw, 0)
-    parsed = json.loads(match.group(0))
-    if not isinstance(parsed, dict):
-        raise TypeError("expected json object")
-    return parsed
-
-
 class IntentRecognizer:
     """快慢车道融合的意图识别器。"""
 
@@ -166,7 +146,7 @@ class IntentRecognizer:
                 temperature=0.0,
                 max_tokens=256,
             )
-            data = _extract_json(raw)
+            data = extract_json(raw)
             intent = Intent(str(data.get("intent", "general")))
             confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
             return intent, confidence
