@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# 测试默认关闭本地语义/重排模型：既不下载大模型，也让测试保持离线、快速。
+# 用 setdefault 的好处是：本地想验证真实模型时，显式设环境变量即可覆盖。
+os.environ.setdefault("EMBED_MODEL", "none")
+os.environ.setdefault("RERANK_MODEL", "none")
 
 
 class FakeLLM:

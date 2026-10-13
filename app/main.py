@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.agent import TravelAgent
 from app.config import Settings, load_settings
+from app.embedder import build_embedder, build_reranker
 from app.llm import LLMClient
 from app.rag import KnowledgeBase
 
@@ -47,12 +48,19 @@ class ChatResponse(BaseModel):
 async def lifespan(app: FastAPI):
     settings: Settings = load_settings()
     llm = LLMClient(settings)
-    knowledge_base = KnowledgeBase.from_json()
+    embedder = build_embedder(settings.embed_model)
+    reranker = build_reranker(settings.rerank_model)
+    knowledge_base = KnowledgeBase.from_json(embedder=embedder, reranker=reranker)
+    knowledge_base.warmup()  # 预加载向量/重排模型，避免首个请求冷启动
     app.state.settings = settings
     app.state.llm = llm
     app.state.agent = TravelAgent(llm, knowledge_base)
     logging.getLogger(__name__).info(
-        "旅行助手启动，模型：%s，知识库：%d 条", settings.model, knowledge_base.size
+        "旅行助手启动，模型：%s，知识库：%d 条，语义检索：%s，重排：%s",
+        settings.model,
+        knowledge_base.size,
+        "开" if knowledge_base.has_vector else "关",
+        "开" if knowledge_base.has_reranker else "关",
     )
     yield
 
@@ -97,6 +105,8 @@ async def health(request: Request) -> dict[str, Any]:
         "status": "ok",
         "model": settings.model,
         "kb_size": agent._kb.size,
+        "vector": agent._kb.has_vector,
+        "rerank": agent._kb.has_reranker,
         "profile_users": agent.profile_user_count,
         "auth_required": bool(settings.access_token),
     }

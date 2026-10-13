@@ -274,7 +274,8 @@ class TravelAgent:
     ) -> _Prepared:
         hits: list[Hit] = await self._kb.retrieve(message, intent=ir.intent.value, top_k=3)
         citations = [
-            {"doc_id": h.doc_id, "title": h.title, "score": round(h.score, 3)} for h in hits
+            {"doc_id": h.doc_id, "title": h.title, "score": round(h.score, 3), "channel": h.channel}
+            for h in hits
         ]
         if not hits:
             return _Prepared(

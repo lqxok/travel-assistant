@@ -20,6 +20,7 @@ from typing import Any
 
 from app.agent import TravelAgent
 from app.config import load_settings
+from app.embedder import build_embedder, build_reranker
 from app.intents import IntentRecognizer, RuleEngine
 from app.json_utils import extract_json
 from app.llm import LLMClient, Message
@@ -182,10 +183,18 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="只跑离线指标")
     parser.add_argument("--limit", type=int, default=None, help="在线部分每组只跑 N 条")
+    parser.add_argument(
+        "--semantic",
+        action="store_true",
+        help="检索评测启用本地语义通道 + 重排（需已下载模型）",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
-    kb = KnowledgeBase.from_json()
+    embedder = build_embedder(settings.embed_model) if args.semantic else None
+    reranker = build_reranker(settings.rerank_model) if args.semantic else None
+    kb = KnowledgeBase.from_json(embedder=embedder, reranker=reranker)
+    kb.warmup()
     cases = load_cases()
 
     offline_only = args.offline or not settings.has_api_key
@@ -193,6 +202,12 @@ async def main() -> None:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": "offline" if offline_only else "full",
         "model": settings.model,
+        "retrieval_channels": {
+            "keyword": True,
+            "intent": True,
+            "semantic": kb.has_vector,
+            "rerank": kb.has_reranker,
+        },
         "offline": await run_offline(cases, kb),
     }
     if offline_only and not args.offline:
