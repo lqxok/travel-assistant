@@ -19,6 +19,12 @@ class FakeLLM:
             return self._replies.pop(0)
         return "（默认回答）"
 
+    async def stream(self, messages, *, system=None, temperature=None, max_tokens=None):
+        self.calls.append({"messages": messages, "system": system})
+        text = self._replies.pop(0) if self._replies else "（默认回答）"
+        for ch in text:
+            yield ch
+
 
 @pytest.fixture
 def fake_llm_factory():

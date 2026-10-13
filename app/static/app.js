@@ -1,4 +1,4 @@
-// 旅行助手前端：调用 /api/v1/chat，展示回答、意图标签与引用来源。
+// 旅行助手前端：调用 /api/v1/chat/stream（SSE），逐字展示回答，并显示意图与引用来源。
 const chat = document.getElementById("chat");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
@@ -66,21 +66,54 @@ async function send() {
   autosize();
   addUser(text);
 
-  const { bubble, meta } = addAssistantBubble("思考中…");
+  const { bubble, meta } = addAssistantBubble("连接中…");
   sendBtn.disabled = true;
+  let started = false;
   try {
-    const res = await fetch("/api/v1/chat", {
+    const res = await fetch("/api/v1/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text }),
     });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "HTTP " + res.status);
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const raw = buffer.slice(0, sep).trim();
+        buffer = buffer.slice(sep + 2);
+        if (!raw.startsWith("data:")) continue;
+        let event;
+        try {
+          event = JSON.parse(raw.slice(5).trim());
+        } catch {
+          continue;
+        }
+        if (event.type === "status") {
+          if (!started) bubble.textContent = "…" + event.text;
+        } else if (event.type === "delta") {
+          if (!started) {
+            bubble.textContent = "";
+            started = true;
+          }
+          bubble.textContent += event.text;
+          scrollToBottom();
+        } else if (event.type === "done") {
+          renderMeta(meta, event);
+        } else if (event.type === "error") {
+          bubble.textContent += "\n[错误] " + (event.error || "");
+        }
+      }
     }
-    const data = await res.json();
-    bubble.textContent = data.reply || "(空回复)";
-    renderMeta(meta, data);
+    if (!started && !bubble.textContent) bubble.textContent = "(空回复)";
   } catch (e) {
     bubble.textContent = "请求失败：" + e.message;
   } finally {

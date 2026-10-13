@@ -4,11 +4,16 @@
   用户输入 → 意图识别
     ├ budget / trip_planning → 抽参数 → 调工具 → 让模型润色成自然语言
     └ 其它（guide / transport / stay / general） → 本地检索 → 有据生成（回传引用来源）
+
+对外提供两种用法：
+  - `handle()`  一次性返回完整回答
+  - `astream()` 逐块产出（status / delta / done），供 SSE 前端使用
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +28,14 @@ from app.tools import TOOLS, invoke
 BASE_SYSTEM = (
     "你是「旅行助手」，帮助用户规划行程、估算预算、解答签证与出行问题。"
     "回答要具体、可执行；不确定或资料没有的信息，不要编造。"
+)
+RAG_SYSTEM = (
+    "你是「旅行助手」。只根据下面提供的参考资料回答用户问题；"
+    "资料不足就直说，不要编造。回答要具体、可执行。"
+)
+RENDER_SYSTEM = (
+    "你是「旅行助手」。下面是一次工具调用的结果，请用自然、口语化的中文整理成对用户有用的回答，"
+    "保留关键数字，不要添加结果里没有的信息。"
 )
 
 # 需要调用工具的意图 → 对应工具名
@@ -52,6 +65,21 @@ class AgentReply:
     tool_result: dict[str, Any] | None = None
 
 
+@dataclass(slots=True)
+class _Prepared:
+    """一次回答的"准备结果"：要么给模型一个 prompt 去生成，要么是一个固定回复。"""
+
+    intent: Intent
+    confidence: float
+    source: str
+    stage: str = "生成回答"
+    system: str = ""
+    user: str = ""
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    tool_result: dict[str, Any] | None = None
+    fixed_reply: str | None = None
+
+
 class TravelAgent:
     """旅行助手编排器。"""
 
@@ -60,19 +88,61 @@ class TravelAgent:
         self._kb = knowledge_base
         self._intents = IntentRecognizer(llm)
 
+    # ---------- 对外：非流式 ----------
     async def handle(self, message: str) -> AgentReply:
+        prepared = await self._prepare(message)
+        if prepared.fixed_reply is not None:
+            reply = prepared.fixed_reply
+        else:
+            reply = await self._llm.complete(
+                [Message(role="user", content=prepared.user)], system=prepared.system
+            )
+        return AgentReply(
+            reply,
+            prepared.intent,
+            prepared.confidence,
+            prepared.source,
+            citations=prepared.citations,
+            tool_result=prepared.tool_result,
+        )
+
+    # ---------- 对外：流式 ----------
+    async def astream(self, message: str) -> AsyncIterator[dict[str, Any]]:
+        prepared = await self._prepare(message)
+        yield {"type": "status", "text": prepared.stage}
+
+        if prepared.fixed_reply is not None:
+            yield {"type": "delta", "text": prepared.fixed_reply}
+        else:
+            async for piece in self._llm.stream(
+                [Message(role="user", content=prepared.user)], system=prepared.system
+            ):
+                yield {"type": "delta", "text": piece}
+
+        yield {
+            "type": "done",
+            "intent": prepared.intent.value,
+            "confidence": round(prepared.confidence, 3),
+            "source": prepared.source,
+            "citations": prepared.citations,
+            "tool_result": prepared.tool_result,
+        }
+
+    # ---------- 内部：决定走哪条分支 ----------
+    async def _prepare(self, message: str) -> _Prepared:
         ir = await self._intents.recognize(message)
         tool_name = _TOOL_FOR_INTENT.get(ir.intent)
         if tool_name is not None:
-            return await self._handle_with_tool(message, ir, tool_name)
-        return await self._handle_with_rag(message, ir)
+            return await self._prepare_tool(message, ir, tool_name)
+        return await self._prepare_rag(message, ir)
 
-    # ---------- 工具分支 ----------
-    async def _handle_with_tool(self, message: str, ir: IntentResult, tool_name: str) -> AgentReply:
+    async def _prepare_tool(self, message: str, ir: IntentResult, tool_name: str) -> _Prepared:
         spec = TOOLS[tool_name]
-        params = await self._extract_params(message, spec.name, spec.params_model.model_json_schema())
+        params = await self._extract_params(
+            message, spec.name, spec.params_model.model_json_schema()
+        )
         if params is None:
-            return await self._direct_reply(message, ir)
+            return _Prepared(ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message)
 
         try:
             result = invoke(tool_name, **params)
@@ -83,12 +153,42 @@ class TravelAgent:
                 for err in exc.errors()
                 if err.get("type") == "missing"
             ]
-            return AgentReply(self._ask_for_missing(missing), ir.intent, ir.confidence, ir.source)
+            return _Prepared(
+                ir.intent, ir.confidence, ir.source, fixed_reply=self._ask_for_missing(missing)
+            )
         except Exception:  # noqa: BLE001 —— 其它异常退化为直接回答
-            return await self._direct_reply(message, ir)
+            return _Prepared(ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message)
 
-        reply = await self._render_tool_result(message, tool_name, result)
-        return AgentReply(reply, ir.intent, ir.confidence, ir.source, tool_result=result)
+        user = f"用户问题：{message}\n工具：{tool_name}\n结果(JSON)：{json.dumps(result, ensure_ascii=False)}"
+        return _Prepared(
+            ir.intent,
+            ir.confidence,
+            ir.source,
+            stage="整理结果",
+            system=RENDER_SYSTEM,
+            user=user,
+            tool_result=result,
+        )
+
+    async def _prepare_rag(self, message: str, ir: IntentResult) -> _Prepared:
+        hits: list[Hit] = await self._kb.retrieve(message, intent=ir.intent.value, top_k=3)
+        citations = [
+            {"doc_id": h.doc_id, "title": h.title, "score": round(h.score, 3)} for h in hits
+        ]
+        if not hits:
+            return _Prepared(
+                ir.intent, ir.confidence, ir.source, system=BASE_SYSTEM, user=message, citations=citations
+            )
+        context = "\n\n".join(f"[{i}] {h.title}\n{h.text}" for i, h in enumerate(hits, 1))
+        return _Prepared(
+            ir.intent,
+            ir.confidence,
+            ir.source,
+            stage="检索资料",
+            system=RAG_SYSTEM,
+            user=f"参考资料：\n{context}\n\n用户问题：{message}",
+            citations=citations,
+        )
 
     async def _extract_params(
         self, message: str, tool_name: str, schema: dict[str, Any]
@@ -111,45 +211,9 @@ class TravelAgent:
             return None
         return data or None
 
-    async def _render_tool_result(
-        self, message: str, tool_name: str, result: dict[str, Any]
-    ) -> str:
-        """把工具结果润色成自然语言，不额外编造。"""
-        system = (
-            "你是「旅行助手」。下面是一次工具调用的结果，请用自然、口语化的中文整理成对用户有用的回答，"
-            "保留关键数字，不要添加结果里没有的信息。"
-        )
-        user = f"用户问题：{message}\n工具：{tool_name}\n结果(JSON)：{json.dumps(result, ensure_ascii=False)}"
-        return await self._llm.complete([Message(role="user", content=user)], system=system)
-
-    # ---------- 检索分支 ----------
-    async def _handle_with_rag(self, message: str, ir: IntentResult) -> AgentReply:
-        hits: list[Hit] = await self._kb.retrieve(message, intent=ir.intent.value, top_k=3)
-        if hits:
-            context = "\n\n".join(f"[{i}] {h.title}\n{h.text}" for i, h in enumerate(hits, 1))
-            system = (
-                "你是「旅行助手」。只根据下面提供的参考资料回答用户问题；"
-                "资料不足就直说，不要编造。回答要具体、可执行。"
-            )
-            user = f"参考资料：\n{context}\n\n用户问题：{message}"
-        else:
-            system = BASE_SYSTEM
-            user = message
-
-        reply = await self._llm.complete([Message(role="user", content=user)], system=system)
-        citations = [
-            {"doc_id": h.doc_id, "title": h.title, "score": round(h.score, 3)} for h in hits
-        ]
-        return AgentReply(reply, ir.intent, ir.confidence, ir.source, citations=citations)
-
-    # ---------- 兜底 ----------
     @staticmethod
     def _ask_for_missing(missing: list[str]) -> str:
         """缺参数时向用户追问。"""
         if not missing:
             return "要算得更准，我还需要一点信息，麻烦补充一下出发地、天数或人数。"
         return "为了帮你算得更准，我还需要这些信息：" + "、".join(missing) + "。"
-
-    async def _direct_reply(self, message: str, ir: IntentResult) -> AgentReply:
-        reply = await self._llm.complete([Message(role="user", content=message)], system=BASE_SYSTEM)
-        return AgentReply(reply, ir.intent, ir.confidence, ir.source)

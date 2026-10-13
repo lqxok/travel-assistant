@@ -31,3 +31,15 @@ def test_chat_rejects_empty_message(fake_llm_factory):
     with TestClient(app) as client:
         resp = client.post("/api/v1/chat", json={"message": ""})
         assert resp.status_code == 422  # Pydantic 校验拒绝空消息
+
+
+def test_chat_stream_endpoint(fake_llm_factory):
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(["你好呀，我是旅行助手。"]), KnowledgeBase([]))
+
+        with client.stream("POST", "/api/v1/chat/stream", json={"message": "你好呀"}) as resp:
+            assert resp.status_code == 200
+            body = "".join(resp.iter_text())
+
+        assert "data:" in body
+        assert '"type": "done"' in body

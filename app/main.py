@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -93,6 +95,22 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         citations=result.citations,
         tool_result=result.tool_result,
     )
+
+
+@app.post("/api/v1/chat/stream", tags=["chat"])
+async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
+    """流式对话：SSE 事件为 status / delta / done / error。"""
+    agent: TravelAgent = request.app.state.agent
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event in agent.astream(body.message):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            error = {"type": "error", "error": str(exc)}
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

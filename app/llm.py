@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 from openai import AsyncOpenAI
 
@@ -79,3 +79,31 @@ class LLMClient:
                     await asyncio.sleep(self._backoff * (2**attempt))
 
         raise RuntimeError(f"LLM 调用失败：{last_error}")
+
+    async def stream(
+        self,
+        messages: Sequence[Message],
+        *,
+        system: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[str]:
+        """流式返回模型正文（只产出 content，不含思考内容）。"""
+        payload: list[dict[str, str]] = []
+        if system:
+            payload.append({"role": "system", "content": system})
+        payload.extend({"role": m.role, "content": m.content} for m in messages)
+
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=payload,  # type: ignore[arg-type]
+            temperature=self._temperature if temperature is None else temperature,
+            max_tokens=self._max_tokens if max_tokens is None else max_tokens,
+            stream=True,
+        )
+        async for chunk in response:
+            if not chunk.choices:
+                continue
+            piece = getattr(chunk.choices[0].delta, "content", None)
+            if piece:
+                yield piece

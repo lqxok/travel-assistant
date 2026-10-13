@@ -53,3 +53,23 @@ async def test_budget_branch(fake_llm_factory):
     assert reply.intent is Intent.BUDGET
     assert reply.tool_result is not None
     assert reply.tool_result["total_cny"] == 9000
+
+
+async def test_astream_emits_status_delta_done(fake_llm_factory):
+    llm = fake_llm_factory(["根据资料，护照有效期应不少于 6 个月。"])
+    events = [e async for e in TravelAgent(llm, _kb()).astream("去日本旅游要准备什么签证材料")]
+
+    assert events[0]["type"] == "status"
+    assert events[-1]["type"] == "done"
+    text = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert "护照" in text
+    assert events[-1]["citations"][0]["doc_id"] == "d1"
+
+
+async def test_astream_fixed_reply_when_param_missing(fake_llm_factory):
+    llm = fake_llm_factory(['{"destination": "成都", "days": 3}'])
+    events = [e async for e in TravelAgent(llm, _kb()).astream("帮我规划去成都的三天行程")]
+
+    assert events[-1]["type"] == "done"
+    text = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert "出发城市" in text

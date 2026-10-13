@@ -105,6 +105,17 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 返回 `status`、`model`、`kb_size`。
 
+### `POST /api/v1/chat/stream`
+
+流式对话，返回 `text/event-stream`，每行 `data: {JSON}`，事件类型：
+
+- `status`：当前阶段（如「检索资料」「整理结果」）
+- `delta`：增量正文
+- `done`：结束，附带 `intent` / `confidence` / `source` / `citations` / `tool_result`
+- `error`：出错信息
+
+前端默认走这个接口，回答**逐字出现**。
+
 ## 测试
 
 ```bash
