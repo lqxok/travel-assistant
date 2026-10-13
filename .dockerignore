@@ -7,6 +7,5 @@ __pycache__/
 .gitignore
 .env
 data/profiles.json
-data/*.db
 tests/
 *.md

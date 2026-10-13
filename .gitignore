@@ -11,9 +11,6 @@ venv/
 # 用户长期记忆（运行时数据）
 data/profiles.json
 
-# 本地 SQLite 回退库（运行时数据）
-data/*.db
-
 # 评测报告（运行时产物）
 evals/report.json
 

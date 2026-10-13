@@ -13,7 +13,6 @@
 - **Web 界面**：原生 HTML/CSS/JS 聊天界面，展示回答、意图标签与参考资料；支持**流式开关**与新建会话。
 - **多轮会话**：传入相同 `session_id` 即带上历史对话，支持「那改成 5 天」这类追问。
 - **用户长期记忆**：按 `user_id` 记住稳定偏好/事实（如常驻城市、饮食忌口），**跨会话生效**并落盘保存。
-- **运营数据看板**：每次对话落库（MySQL，本地回退 SQLite），统计调用量、意图/工具/命中通道分布、延迟分位与近 7 天趋势；Vue 3 管理后台（`/admin`）可视化，统计结果经 Redis 缓存。
 
 ## 架构
 
@@ -31,11 +30,8 @@ Browser UI (app/static)
       │            → RRF 融合 → cross-encoder 重排（app/embedder.py）
       │            → LLM 依资料生成 + 返回引用
       │
-      ├─ 工具分支 → tools (app/tools.py)       行程 / 预算
-      │            → 抽取参数 → 调工具 → 润色成自然语言
-      │
-      └─ 每次调用落库 → store (app/store.py, MySQL)  ←→  admin (app/admin.py) + Vue 看板
-                                        └─ Redis 缓存 (app/cache.py)
+      └─ 工具分支 → tools (app/tools.py)       行程 / 预算
+                   → 抽取参数 → 调工具 → 润色成自然语言
       ▼
   LLMClient (app/llm.py)  OpenAI 兼容接口 + 重试
 ```
@@ -53,12 +49,8 @@ travel-assistant/
 │   ├── embedder.py      # 本地向量/重排模型封装（fastembed，懒加载 + 降级）
 │   ├── tools.py         # 旅行工具（行程 / 预算）
 │   ├── agent.py         # 编排：意图 → 检索 / 工具 / 直接回答
-│   ├── store.py         # 对话日志存储与统计（SQLAlchemy，MySQL/SQLite）
-│   ├── cache.py         # Redis 统计缓存（可选，未配置自动跳过）
-│   ├── admin.py         # 运营看板接口
-│   ├── auth.py          # 访问口令守卫
 │   ├── json_utils.py    # 稳健解析模型返回的 JSON
-│   └── static/          # 前端（聊天页 + admin.html 看板）
+│   └── static/          # 前端（index.html / styles.css / app.js）
 ├── data/knowledge.json  # 知识库语料
 ├── tests/               # pytest 测试
 ├── requirements.txt
@@ -89,8 +81,6 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | `EMBED_MODEL` | 语义检索模型，默认 `BAAI/bge-small-zh-v1.5`；填 `none` 关闭语义通道 |
 | `RERANK_MODEL` | 重排模型，默认 `BAAI/bge-reranker-base`；填 `none` 关闭重排（只用 RRF 融合） |
 | `HF_ENDPOINT` | HuggingFace 镜像地址，国内建议 `https://hf-mirror.com` |
-| `DATABASE_URL` | 对话日志库；留空回退 SQLite（本地零依赖）。compose 里默认指向内置 MySQL |
-| `REDIS_URL` | 统计缓存；留空则不启用 |
 
 > 对外部署时建议设置 `ACCESS_TOKEN`，否则任何人拿到地址都能免费用你的模型额度。
 > 前端顶部有「口令」输入框；也可用 `http://<host>/?token=xxx` 打开一次（会自动记住）。
@@ -131,19 +121,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ### `GET /api/v1/health`
 
-返回 `status`、`model`、`kb_size`、`vector` / `rerank`（两路是否启用）、`database` / `cache`、`auth_required`。
-
-### `GET /api/v1/admin/stats`（需口令）
-
-运营看板主数据：`total_calls` / `today_calls` / `sessions` / `users` / `intent_distribution` /
-`tool_distribution` / `channel_distribution` / `latency_ms`（mean / p50 / p95 / max）/ `trend`（近 N 天，`?days=`）。
-命中 Redis 缓存时 `cached` 为 `true`。
-
-### `GET /api/v1/admin/logs`（需口令）
-
-最近调用记录（倒序，`?limit=`），字段含意图、来源、工具、命中通道、延迟、会话。
-
-> 管理后台页面：`http://<host>:8000/admin`（Vue 3，同样需要口令）。
+返回 `status`、`model`、`kb_size`、`vector` / `rerank`（两路是否启用）、`auth_required`。
 
 ### `POST /api/v1/chat/stream`
 
@@ -214,9 +192,6 @@ git pull && docker compose up -d --build
   之后改代码重建可命中缓存，不会重复下载。内存吃紧（如 4G 机器同时跑别的服务）可在 `.env` 里设
   `RERANK_MODEL=none` 只保留语义通道或 `EMBED_MODEL=none` 退回纯词面检索。
 - `./data` 以卷挂载，用户长期记忆 `profiles.json` **持久化**，容器重建不丢。
-- `docker compose up -d` 会一并启动 **mysql / redis** 两个容器（`mysql_data` / `redis_data` 命名卷持久化）。
-  若 4G 内存与模型同跑吃紧，可删掉 compose 里的 `mysql` / `redis` 两个 service——app 会自动回退 SQLite、跳过缓存。
-- 运营数据看板：`http://<公网IP>:8000/admin`（用同一口令）。
 - 镜像以**非 root 用户**运行，并内置 `/api/v1/health` 健康检查与 `restart: unless-stopped`。
 - 生产建议前置 Nginx + HTTPS，密钥通过环境变量注入（不要写进镜像）。
 
