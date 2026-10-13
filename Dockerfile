@@ -7,6 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     # 国内直连 HuggingFace 常被墙，统一走镜像；模型缓存放到共享目录供非 root 用户读取
     HF_ENDPOINT=https://hf-mirror.com \
+    # 关闭 Xet 传输：镜像源不支持 Xet 的 CAS 鉴权（会 401），回退标准 HTTP 下载
+    HF_HUB_DISABLE_XET=1 \
     FASTEMBED_CACHE_PATH=/opt/models
 
 WORKDIR /app
