@@ -133,6 +133,34 @@ pytest
 
 测试使用假 LLM，不会真实调用 API。
 
+## 部署（Docker）
+
+```bash
+# 1) 服务器安装 Docker（Ubuntu 示例）
+curl -fsSL https://get.docker.com | sh
+sudo systemctl enable --now docker
+
+# 2) 拉代码
+git clone https://github.com/lqxok/travel-assistant.git
+cd travel-assistant
+
+# 3) 配置密钥
+cp .env.example .env
+vim .env            # 填 OPENAI_API_KEY / OPENAI_MODEL 等
+
+# 4) 启动（后台常驻）
+docker compose up -d --build
+docker compose logs -f
+
+# 5) 更新版本时
+git pull && docker compose up -d --build
+```
+
+- 访问 `http://<服务器公网IP>:8000/`；记得在云控制台**安全组放行 TCP 8000**。
+- `./data` 以卷挂载，用户长期记忆 `profiles.json` **持久化**，容器重建不丢。
+- 镜像以**非 root 用户**运行，并内置 `/api/v1/health` 健康检查与 `restart: unless-stopped`。
+- 生产建议前置 Nginx + HTTPS，密钥通过环境变量注入（不要写进镜像）。
+
 ## 说明
 
 个人学习与实践项目。行程与预算为粗略估算，签证等时效性信息请以官方最新要求为准。
