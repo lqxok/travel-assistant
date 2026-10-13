@@ -75,7 +75,8 @@ def require_token(request: Request) -> None:
     if not expected:
         return  # 未配置口令 → 不校验
     provided = request.headers.get("x-access-token") or request.query_params.get("token") or ""
-    if not secrets.compare_digest(provided, expected):
+    # 用 bytes 比较：compare_digest 不支持非 ASCII 字符串，直接比 str 会抛异常
+    if not secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="访问口令无效或未提供")
 
 

@@ -64,5 +64,13 @@ def test_token_required_when_configured(fake_llm_factory):
             assert ok.status_code == 200
             # 健康检查保持公开（供容器健康检查）
             assert client.get("/api/v1/health").status_code == 200
+
+            # 非 ASCII 口令应返回 401，而不是 500
+            weird = client.post(
+                "/api/v1/chat",
+                headers={"X-Access-Token": "你的口令"},
+                json={"message": "你好呀"},
+            )
+            assert weird.status_code == 401
         finally:
             app.state.settings = original
