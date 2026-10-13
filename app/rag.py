@@ -1,7 +1,7 @@
 """本地知识检索（RAG）。
 
 三路通道并行召回，再用 RRF（Reciprocal Rank Fusion）融合，最后可选 cross-encoder 重排：
-- 关键词通道：按词面重合度打分，召回广、可解释；
+- 关键词通道：中文二元组分词 + IDF 加权，压低高频虚词，召回广、可解释；
 - 意图通道：先按意图收敛候选，再打分，更准；
 - 语义通道：用本地 embedding 算余弦相似度，能召回「换了说法」的同义问题（需 embedder）。
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,16 +36,33 @@ DEFAULT_KB_PATH = BASE_DIR / "data" / "knowledge.json"
 # RRF 平滑常数：越大越削弱「排名靠前」的优势，取检索界常用默认值 60
 RRF_K = 60
 
+# 中文停用词：这类词几乎每篇都有，参与打分会把结果带偏
+_STOPWORDS = frozenset(
+    {
+        "的", "了", "和", "与", "或", "及", "在", "有", "是", "我", "你", "他", "她", "它",
+        "们", "吗", "呢", "吧", "啊", "啦", "呀", "怎么", "什么", "哪些", "哪个", "如何",
+        "是否", "可以", "需要", "应该", "一下", "请问", "帮我", "我要", "我想", "还是",
+        "还有", "以及", "这个", "那个", "的话", "一个", "我们", "多少", "时候", "注意",
+    }
+)
+
 
 def tokenize(text: str) -> list[str]:
-    """英文按词、中文按二元组切分，便于轻量词面匹配。"""
+    """英文按词、中文按二元组切分，并过滤停用词。
+
+    轻量、零依赖；配合 IDF 加权可明显压低「怎么/什么」这类高频虚词的干扰。
+    """
     lowered = text.lower()
-    tokens = _WORD_RE.findall(lowered)
+    tokens = [token for token in _WORD_RE.findall(lowered) if token not in _STOPWORDS]
     for run in _CJK_RE.findall(lowered):
         if len(run) == 1:
-            tokens.append(run)
-        else:
-            tokens.extend(run[i : i + 2] for i in range(len(run) - 1))
+            if run not in _STOPWORDS:
+                tokens.append(run)
+            continue
+        for i in range(len(run) - 1):
+            bigram = run[i : i + 2]
+            if bigram not in _STOPWORDS:
+                tokens.append(bigram)
     return tokens
 
 
@@ -77,6 +95,11 @@ class KnowledgeBase:
     ) -> None:
         self._docs = list(docs)
         self._doc_tokens = {d.doc_id: set(tokenize(f"{d.title} {d.text}")) for d in self._docs}
+        # 文档频率：用于 IDF 加权，压低到处都出现的高频词
+        self._df: dict[str, int] = {}
+        for tokens in self._doc_tokens.values():
+            for token in tokens:
+                self._df[token] = self._df.get(token, 0) + 1
         self._embedder = embedder
         self._reranker = reranker
         # 文档向量懒计算：首次用到语义通道时才编码，构造 KnowledgeBase 不强依赖模型
@@ -127,15 +150,25 @@ class KnowledgeBase:
                 logger.warning("重排模型预热失败，将在首次调用时重试", exc_info=True)
 
     # ---------- 词面 / 意图通道 ----------
+    def _idf(self, token: str) -> float:
+        """BM25 风格逆文档频率：越常见的词权重越低。"""
+        df = self._df.get(token, 0)
+        n = max(len(self._docs), 1)
+        return math.log(1 + (n - df + 0.5) / (df + 0.5))
+
     def _rank(self, query: str, candidates: Sequence[Doc]) -> list[tuple[Doc, float]]:
+        """IDF 加权的词面重合度打分，返回按分降序。"""
         query_tokens = set(tokenize(query))
         if not query_tokens:
             return []
+        # 分母用 query 全部词的 IDF 之和，分子用命中词的 IDF 之和 → 分数落在 [0,1]
+        total = sum(self._idf(token) for token in query_tokens) or 1.0
         scored: list[tuple[Doc, float]] = []
         for doc in candidates:
             overlap = query_tokens & self._doc_tokens[doc.doc_id]
             if overlap:
-                scored.append((doc, len(overlap) / len(query_tokens)))
+                weight = sum(self._idf(token) for token in overlap)
+                scored.append((doc, weight / total))
         scored.sort(key=lambda pair: pair[1], reverse=True)
         return scored
 
