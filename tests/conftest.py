@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +12,9 @@ import pytest
 # 用 setdefault 的好处是：本地想验证真实模型时，显式设环境变量即可覆盖。
 os.environ.setdefault("EMBED_MODEL", "none")
 os.environ.setdefault("RERANK_MODEL", "none")
+# 测试用临时 SQLite，避免往仓库 data/ 里写库文件
+_test_db = Path(tempfile.gettempdir()) / "travel_assistant_test.db"
+os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_test_db.as_posix()}")
 
 
 class FakeLLM:

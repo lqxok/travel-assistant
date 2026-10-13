@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>运营数据看板 · 旅行助手</title>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --card: #ffffff;
+      --ink: #1f2933;
+      --muted: #6b7684;
+      --line: #e4e8ee;
+      --brand: #114b91;
+      --accent: #007948;
+      --warn: #b26a00;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+      font-size: 14px;
+    }
+    header {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 24px; background: var(--card);
+      border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; z-index: 10;
+    }
+    header h1 { font-size: 17px; margin: 0; color: var(--brand); }
+    header .spacer { flex: 1; }
+    header input {
+      padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; width: 190px;
+      font-size: 13px;
+    }
+    button {
+      padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer;
+      background: var(--brand); color: #fff; font-size: 13px;
+    }
+    button.ghost { background: #eef1f5; color: var(--ink); }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; }
+    .kpis {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-bottom: 18px;
+    }
+    .kpi {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .kpi .label { color: var(--muted); font-size: 12px; }
+    .kpi .value { font-size: 26px; font-weight: 700; color: var(--brand); margin-top: 6px; }
+    .kpi .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px; margin-bottom: 16px;
+    }
+    .card h2 { font-size: 14px; margin: 0 0 14px; color: var(--ink); }
+    .bars { display: flex; align-items: flex-end; gap: 10px; height: 150px; }
+    .bars .bar-wrap {
+      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+      height: 100%; justify-content: flex-end;
+    }
+    .bars .bar {
+      width: 100%; background: linear-gradient(180deg, #2f6fbf, var(--brand));
+      border-radius: 5px 5px 0 0; min-height: 2px; transition: height .3s;
+    }
+    .bars .bar-label { font-size: 11px; color: var(--muted); }
+    .bars .bar-value { font-size: 11px; color: var(--brand); font-weight: 600; }
+    .dist { display: flex; flex-direction: column; gap: 10px; }
+    .dist .row { display: grid; grid-template-columns: 110px 1fr 40px; align-items: center; gap: 10px; }
+    .dist .name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dist .track { background: #eef1f5; border-radius: 5px; height: 16px; overflow: hidden; }
+    .dist .fill { height: 100%; background: var(--accent); border-radius: 5px; }
+    .dist .num { text-align: right; font-weight: 600; color: var(--brand); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    td.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    .pill {
+      display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
+      background: #eef1f5; color: var(--ink);
+    }
+    .pill.tool { background: #fdeee0; color: var(--warn); }
+    .pill.rag { background: #e3f0ea; color: var(--accent); }
+    .empty { color: var(--muted); text-align: center; padding: 26px 0; }
+    .err { color: #b3261e; font-size: 13px; }
+    footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>运营数据看板</h1>
+      <span class="pill" v-if="stats">{{ stats.total_calls }} 次调用</span>
+      <span class="spacer"></span>
+      <input v-model="token" type="password" placeholder="访问口令" @change="saveToken" />
+      <button @click="load" :disabled="loading">{{ loading ? '加载中…' : '刷新' }}</button>
+    </header>
+
+    <main>
+      <p class="err" v-if="error">{{ error }}</p>
+
+      <template v-if="stats">
+        <section class="kpis">
+          <div class="kpi"><div class="label">总调用量</div><div class="value">{{ stats.total_calls }}</div></div>
+          <div class="kpi"><div class="label">今日调用</div><div class="value">{{ stats.today_calls }}</div></div>
+          <div class="kpi"><div class="label">会话数</div><div class="value">{{ stats.sessions }}</div></div>
+          <div class="kpi"><div class="label">用户数</div><div class="value">{{ stats.users }}</div></div>
+          <div class="kpi">
+            <div class="label">平均延迟</div>
+            <div class="value">{{ (stats.latency_ms.mean / 1000).toFixed(2) }}<small> s</small></div>
+          </div>
+          <div class="kpi">
+            <div class="label">P95 延迟</div>
+            <div class="value">{{ (stats.latency_ms.p95 / 1000).toFixed(2) }}<small> s</small></div>
+          </div>
+        </section>
+
+        <div class="card">
+          <h2>近 7 天调用趋势</h2>
+          <div class="bars">
+            <div class="bar-wrap" v-for="d in stats.trend" :key="d.date">
+              <span class="bar-value">{{ d.count }}</span>
+              <div class="bar" :style="{ height: barHeight(d.count) }"></div>
+              <span class="bar-label">{{ d.date }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <h2>意图分布</h2>
+            <div class="dist">
+              <div class="row" v-for="(n, name) in stats.intent_distribution" :key="name">
+                <span class="name">{{ name }}</span>
+                <div class="track"><div class="fill" :style="{ width: pct(n, stats.intent_distribution) }"></div></div>
+                <span class="num">{{ n }}</span>
+              </div>
+              <p class="empty" v-if="!hasData(stats.intent_distribution)">暂无数据</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>工具调用分布</h2>
+            <div class="dist">
+              <div class="row" v-for="(n, name) in stats.tool_distribution" :key="name">
+                <span class="name">{{ name }}</span>
+                <div class="track"><div class="fill" :style="{ width: pct(n, stats.tool_distribution) }"></div></div>
+                <span class="num">{{ n }}</span>
+              </div>
+              <p class="empty" v-if="!hasData(stats.tool_distribution)">暂无数据</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>检索命中通道</h2>
+          <div class="dist">
+            <div class="row" v-for="(n, name) in stats.channel_distribution" :key="name">
+              <span class="name">{{ name }}</span>
+              <div class="track"><div class="fill" :style="{ width: pct(n, stats.channel_distribution) }"></div></div>
+              <span class="num">{{ n }}</span>
+            </div>
+            <p class="empty" v-if="!hasData(stats.channel_distribution)">暂无数据</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>最近调用日志</h2>
+          <table v-if="logs.length">
+            <thead>
+              <tr>
+                <th>时间</th><th>意图</th><th>来源</th><th>工具 / 通道</th><th>延迟</th><th>会话</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in logs" :key="row.id">
+                <td class="mono">{{ row.created_at }}</td>
+                <td>{{ row.intent }}</td>
+                <td>{{ row.source }}</td>
+                <td>
+                  <span class="pill tool" v-if="row.tool_name">{{ row.tool_name }}</span>
+                  <span class="pill rag" v-else-if="row.channel">{{ row.channel }}</span>
+                  <span class="pill" v-else>—</span>
+                </td>
+                <td class="mono">{{ row.latency_ms }} ms</td>
+                <td class="mono">{{ row.session_id || '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="empty" v-else>暂无日志</p>
+        </div>
+      </template>
+      <p class="empty" v-else-if="!error">正在加载…</p>
+    </main>
+    <footer>旅行助手 · 运营后台（Vue 3 + FastAPI + MySQL/Redis）</footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

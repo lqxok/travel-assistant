@@ -28,6 +28,8 @@ class Settings:
     access_token: str = ""
     embed_model: str = DEFAULT_EMBED_MODEL
     rerank_model: str = DEFAULT_RERANK_MODEL
+    database_url: str = ""
+    redis_url: str = ""
 
     @property
     def has_api_key(self) -> bool:
@@ -50,4 +52,8 @@ def load_settings() -> Settings:
         embed_model=os.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL).strip(),
         # 重排模型；设为 none/off 可关闭（关闭后用 RRF 融合排序）
         rerank_model=os.getenv("RERANK_MODEL", DEFAULT_RERANK_MODEL).strip(),
+        # 对话日志库：生产用 MySQL，留空则回退 SQLite（本地零依赖）
+        database_url=os.getenv("DATABASE_URL", "").strip(),
+        # Redis 缓存：留空则不启用
+        redis_url=os.getenv("REDIS_URL", "").strip(),
     )
