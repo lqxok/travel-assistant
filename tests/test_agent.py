@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.agent import TravelAgent
 from app.intents import Intent
+from app.profile import UserProfileStore
 from app.rag import Doc, KnowledgeBase
 
 
@@ -120,3 +121,48 @@ async def test_astream_records_memory(fake_llm_factory):
     assert len(history) == 2
     assert history[0].content == "你好"
     assert history[1].role == "assistant"
+
+
+async def test_user_profile_injected_into_system(fake_llm_factory, tmp_path):
+    store = UserProfileStore(tmp_path / "p.json")
+    store.add_facts("u1", ["常驻北京"])
+    llm = fake_llm_factory(["好的。"])
+    agent = TravelAgent(llm, _kb(), profile=store)
+
+    await agent.handle("推荐住哪里", user_id="u1")
+
+    assert "常驻北京" in (llm.calls[0]["system"] or "")
+
+
+async def test_extracts_and_stores_facts(fake_llm_factory, tmp_path):
+    store = UserProfileStore(tmp_path / "p.json")
+    # 第一次调用是抽取事实，第二次是生成回答
+    llm = fake_llm_factory(['{"facts": ["常驻北京", "不吃辣"]}', "好的。"])
+    agent = TravelAgent(llm, _kb(), profile=store)
+
+    await agent.handle("我常驻北京，也不吃辣，帮我推荐住哪里", user_id="u1")
+
+    assert "常驻北京" in store.facts("u1")
+    assert "不吃辣" in store.facts("u1")
+
+
+async def test_no_user_id_no_profile_write(fake_llm_factory, tmp_path):
+    store = UserProfileStore(tmp_path / "p.json")
+    llm = fake_llm_factory(["好的。"])
+    agent = TravelAgent(llm, _kb(), profile=store)
+
+    await agent.handle("我常驻北京，帮我推荐住哪里")
+
+    assert store.user_count == 0
+
+
+async def test_profile_facts_used_for_tool_params(fake_llm_factory, tmp_path):
+    store = UserProfileStore(tmp_path / "p.json")
+    store.add_facts("u1", ["常驻北京"])
+    llm = fake_llm_factory(['{"destination": "三亚", "days": 3}', "好的。"])
+    agent = TravelAgent(llm, _kb(), profile=store)
+
+    await agent.handle("帮我规划去三亚的三天行程", user_id="u1")
+
+    # 抽取参数那次调用应带上长期信息（便于补全出发地）
+    assert "常驻北京" in (llm.calls[0]["system"] or "")

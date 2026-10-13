@@ -24,6 +24,7 @@ from app.intents import Intent, IntentRecognizer, IntentResult
 from app.json_utils import extract_json
 from app.llm import LLMClient, Message
 from app.memory import ConversationMemory
+from app.profile import UserProfileStore, worth_extracting
 from app.rag import Hit, KnowledgeBase
 from app.tools import TOOLS, invoke
 
@@ -91,15 +92,25 @@ class TravelAgent:
         llm: LLMClient,
         knowledge_base: KnowledgeBase,
         memory: ConversationMemory | None = None,
+        profile: UserProfileStore | None = None,
     ) -> None:
         self._llm = llm
         self._kb = knowledge_base
         self._memory = memory or ConversationMemory()
+        self._profile = profile or UserProfileStore()
         self._intents = IntentRecognizer(llm)
 
     # ---------- 对外：非流式 ----------
-    async def handle(self, message: str, *, session_id: str | None = None) -> AgentReply:
-        prepared = await self._prepare(message, self._history(session_id))
+    async def handle(
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> AgentReply:
+        await self._update_profile(user_id, message)
+        facts = self._profile.facts(user_id) if user_id else []
+        prepared = await self._prepare(message, self._history(session_id), facts)
         if prepared.fixed_reply is not None:
             reply = prepared.fixed_reply
         else:
@@ -119,9 +130,15 @@ class TravelAgent:
 
     # ---------- 对外：流式 ----------
     async def astream(
-        self, message: str, *, session_id: str | None = None
+        self,
+        message: str,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        prepared = await self._prepare(message, self._history(session_id))
+        await self._update_profile(user_id, message)
+        facts = self._profile.facts(user_id) if user_id else []
+        prepared = await self._prepare(message, self._history(session_id), facts)
         yield {"type": "status", "text": prepared.stage}
 
         if prepared.fixed_reply is not None:
@@ -155,19 +172,60 @@ class TravelAgent:
         if session_id and assistant_text:
             self._memory.append(session_id, user_text, assistant_text)
 
-    async def _prepare(self, message: str, history: list[Message]) -> _Prepared:
+    async def _prepare(self, message: str, history: list[Message], facts: list[str]) -> _Prepared:
         ir = await self._intents.recognize(message)
         tool_name = _TOOL_FOR_INTENT.get(ir.intent)
         if tool_name is not None:
-            return await self._prepare_tool(message, ir, tool_name, history)
-        return await self._prepare_rag(message, ir, history)
+            prepared = await self._prepare_tool(message, ir, tool_name, history, facts)
+        else:
+            prepared = await self._prepare_rag(message, ir, history)
+
+        # 把用户长期信息注入系统提示（跨会话生效）
+        if facts and prepared.fixed_reply is None:
+            joined = "；".join(facts)
+            prepared.system = (
+                f"{prepared.system}\n\n已知用户长期信息（请自然参考，不要生硬复述）：{joined}"
+            )
+        return prepared
+
+    async def _update_profile(self, user_id: str | None, message: str) -> None:
+        """（必要时）从用户这句话里抽取长期事实并记录。"""
+        if not user_id or not worth_extracting(message):
+            return
+        facts = await self._extract_facts(message)
+        if facts:
+            self._profile.add_facts(user_id, facts)
+
+    async def _extract_facts(self, message: str) -> list[str]:
+        system = (
+            "从用户的话里抽取值得长期记住的稳定偏好或事实（例如常驻城市、饮食忌口、"
+            "出行习惯、同行情况）。只输出 JSON：{\"facts\": [\"...\"]}；没有则返回 "
+            "{\"facts\": []}。每条不超过 20 字，最多 3 条。不要输出其它文字。"
+        )
+        try:
+            raw = await self._llm.complete(
+                [Message(role="user", content=message)],
+                system=system,
+                temperature=0.0,
+                max_tokens=200,
+            )
+            data = extract_json(raw)
+            raw_facts = data.get("facts") or []
+            return [str(f) for f in raw_facts if str(f).strip()][:3]
+        except Exception:  # noqa: BLE001
+            return []
 
     async def _prepare_tool(
-        self, message: str, ir: IntentResult, tool_name: str, history: list[Message]
+        self,
+        message: str,
+        ir: IntentResult,
+        tool_name: str,
+        history: list[Message],
+        facts: list[str],
     ) -> _Prepared:
         spec = TOOLS[tool_name]
         params = await self._extract_params(
-            message, spec.name, spec.params_model.model_json_schema(), history
+            message, spec.name, spec.params_model.model_json_schema(), history, facts
         )
         if params is None:
             return _Prepared(
@@ -241,6 +299,7 @@ class TravelAgent:
         tool_name: str,
         schema: dict[str, Any],
         history: list[Message],
+        facts: list[str],
     ) -> dict[str, Any] | None:
         """让模型从自然语言里抽出工具所需参数。"""
         system = (
@@ -248,6 +307,8 @@ class TravelAgent:
             f"参数 JSON Schema：{json.dumps(schema, ensure_ascii=False)}。"
             "只输出一个 JSON 对象，字段与 schema 一致；无法确定的字段省略。不要输出其它文字。"
         )
+        if facts:
+            system += f"\n已知用户长期信息（可用于补全参数）：{'；'.join(facts)}"
         try:
             raw = await self._llm.complete(
                 [*history, Message(role="user", content=message)],
@@ -259,6 +320,14 @@ class TravelAgent:
         except Exception:  # noqa: BLE001
             return None
         return data or None
+
+    # ---------- 用户长期记忆 ----------
+    def clear_profile(self, user_id: str) -> None:
+        self._profile.clear(user_id)
+
+    @property
+    def profile_user_count(self) -> int:
+        return self._profile.user_count
 
     @staticmethod
     def _ask_for_missing(missing: list[str]) -> str:

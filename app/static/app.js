@@ -4,9 +4,17 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const streamToggle = document.getElementById("streamToggle");
 const newSessionBtn = document.getElementById("newSession");
+const clearMemoryBtn = document.getElementById("clearMemory");
 
 // 会话 id：同一页面持续复用以获得多轮记忆
 let sessionId = newId();
+
+// 用户 id：跨会话长期记忆（存 localStorage，刷新页面、开新会话都还在）
+let userId = localStorage.getItem("travel_user_id");
+if (!userId) {
+  userId = newId();
+  localStorage.setItem("travel_user_id", userId);
+}
 
 function newId() {
   return crypto.randomUUID
@@ -140,7 +148,7 @@ async function sendOnce(text, bubble, meta) {
   const res = await fetch("/api/v1/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: text, session_id: sessionId }),
+    body: JSON.stringify({ message: text, session_id: sessionId, user_id: userId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -156,7 +164,7 @@ async function sendStream(text, bubble, meta) {
   const res = await fetch("/api/v1/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: text, session_id: sessionId }),
+    body: JSON.stringify({ message: text, session_id: sessionId, user_id: userId }),
   });
   if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
 
@@ -241,6 +249,20 @@ newSessionBtn.addEventListener("click", () => {
   bubble.innerHTML =
     "已开启新会话。可以帮你规划行程、估算花费、查签证与出行攻略。<br />" +
     "试试问：<b>去日本旅游要准备什么签证材料</b>";
+  msg.appendChild(bubble);
+  chat.appendChild(msg);
+});
+
+clearMemoryBtn.addEventListener("click", async () => {
+  chat.innerHTML = "";
+  const msg = el("div", "msg assistant");
+  const bubble = el("div", "bubble");
+  try {
+    await fetch("/api/v1/profile/" + encodeURIComponent(userId), { method: "DELETE" });
+    bubble.textContent = "已清除长期记忆，之后我不会再记得你之前告诉我的偏好。";
+  } catch (e) {
+    bubble.textContent = "清除失败：" + e.message;
+  }
   msg.appendChild(bubble);
   chat.appendChild(msg);
 });

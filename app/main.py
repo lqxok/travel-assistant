@@ -27,7 +27,8 @@ logging.basicConfig(
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户输入")
-    session_id: str | None = Field(None, description="会话标识（后续用于多轮记忆）")
+    session_id: str | None = Field(None, description="会话标识，用于同一会话内的多轮记忆")
+    user_id: str | None = Field(None, description="用户标识，用于跨会话长期记忆")
 
 
 class ChatResponse(BaseModel):
@@ -73,7 +74,13 @@ async def index() -> FileResponse:
 @app.get("/api/v1/health", tags=["system"])
 async def health(request: Request) -> dict[str, Any]:
     settings: Settings = request.app.state.settings
-    return {"status": "ok", "model": settings.model, "kb_size": request.app.state.agent._kb.size}
+    agent: TravelAgent = request.app.state.agent
+    return {
+        "status": "ok",
+        "model": settings.model,
+        "kb_size": agent._kb.size,
+        "profile_users": agent.profile_user_count,
+    }
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse, tags=["chat"])
@@ -82,7 +89,9 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     agent: TravelAgent = request.app.state.agent
     llm: LLMClient = request.app.state.llm
     try:
-        result = await agent.handle(body.message, session_id=body.session_id)
+        result = await agent.handle(
+            body.message, session_id=body.session_id, user_id=body.user_id
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"处理失败：{exc}") from exc
 
@@ -104,13 +113,23 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
 
     async def event_stream() -> AsyncIterator[str]:
         try:
-            async for event in agent.astream(body.message, session_id=body.session_id):
+            async for event in agent.astream(
+                body.message, session_id=body.session_id, user_id=body.user_id
+            ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
             error = {"type": "error", "error": str(exc)}
             yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.delete("/api/v1/profile/{user_id}", tags=["profile"])
+async def clear_profile(user_id: str, request: Request) -> dict[str, str]:
+    """清除某个用户的长期记忆。"""
+    agent: TravelAgent = request.app.state.agent
+    agent.clear_profile(user_id)
+    return {"status": "ok", "user_id": user_id}
 
 
 if __name__ == "__main__":
