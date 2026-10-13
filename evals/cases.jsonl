@@ -1,0 +1,39 @@
+{"id": "intent-01", "type": "intent", "input": "去日本要准备什么签证材料", "expected": "guide"}
+{"id": "intent-02", "type": "intent", "input": "泰国现在免签吗", "expected": "guide"}
+{"id": "intent-03", "type": "intent", "input": "出去玩要买旅行保险吗", "expected": "guide"}
+{"id": "intent-04", "type": "intent", "input": "两个人玩五天预算大概多少", "expected": "budget"}
+{"id": "intent-05", "type": "intent", "input": "这趟大概要花多少钱", "expected": "budget"}
+{"id": "intent-06", "type": "intent", "input": "帮我规划一下三天的路线", "expected": "trip_planning"}
+{"id": "intent-07", "type": "intent", "input": "成都玩几天合适", "expected": "trip_planning"}
+{"id": "intent-08", "type": "intent", "input": "帮我做个行程安排", "expected": "trip_planning"}
+{"id": "intent-09", "type": "intent", "input": "北京到上海的机票", "expected": "transport"}
+{"id": "intent-10", "type": "intent", "input": "怎么去鼓浪屿方便", "expected": "transport"}
+{"id": "intent-11", "type": "intent", "input": "推荐几个市中心的酒店", "expected": "stay"}
+{"id": "intent-12", "type": "intent", "input": "住哪里比较方便", "expected": "stay"}
+{"id": "intent-13", "type": "intent", "input": "在吗", "expected": "general"}
+{"id": "intent-14", "type": "intent", "input": "随便聊聊", "expected": "general"}
+
+{"id": "retrieval-01", "type": "retrieval", "input": "签证需要准备什么材料", "expected_doc": "kb-visa"}
+{"id": "retrieval-02", "type": "retrieval", "input": "护照有效期有什么要求", "expected_doc": "kb-visa"}
+{"id": "retrieval-03", "type": "retrieval", "input": "旅行保险怎么买", "expected_doc": "kb-safety"}
+{"id": "retrieval-04", "type": "retrieval", "input": "行李怎么打包", "expected_doc": "kb-packing"}
+{"id": "retrieval-05", "type": "retrieval", "input": "行程怎么排比较合理", "expected_doc": "kb-route"}
+{"id": "retrieval-06", "type": "retrieval", "input": "坐飞机还是高铁", "expected_doc": "kb-transport"}
+{"id": "retrieval-07", "type": "retrieval", "input": "住宿怎么选", "expected_doc": "kb-stay"}
+{"id": "retrieval-08", "type": "retrieval", "input": "当地美食怎么挑", "expected_doc": "kb-food"}
+{"id": "retrieval-09", "type": "retrieval", "input": "花费怎么分配", "expected_doc": "kb-budget"}
+{"id": "retrieval-10", "type": "retrieval", "input": "旺季订票要注意什么", "expected_doc": "kb-transport"}
+
+{"id": "tool-01", "type": "tool", "input": "两个人去日本玩5天大概多少钱", "expected_tool": "estimate_budget"}
+{"id": "tool-02", "type": "tool", "input": "五天大概要多少预算", "expected_tool": "estimate_budget"}
+{"id": "tool-03", "type": "tool", "input": "一家三口出去玩一周要多少钱", "expected_tool": "estimate_budget"}
+{"id": "tool-04", "type": "tool", "input": "帮我规划从北京去成都的三天行程", "expected_tool": "plan_trip"}
+{"id": "tool-05", "type": "tool", "input": "安排一个五天的成都行程", "expected_tool": "plan_trip"}
+{"id": "tool-06", "type": "tool", "input": "从上海去三亚玩四天，帮我规划", "expected_tool": "plan_trip"}
+
+{"id": "grounded-01", "type": "grounded", "input": "去日本旅游签证要准备什么材料"}
+{"id": "grounded-02", "type": "grounded", "input": "旅行保险有必要买吗"}
+{"id": "grounded-03", "type": "grounded", "input": "住宿怎么选比较合适"}
+{"id": "grounded-04", "type": "grounded", "input": "旅行预算怎么分配"}
+{"id": "grounded-05", "type": "grounded", "input": "交通方式怎么选"}
+{"id": "grounded-06", "type": "grounded", "input": "去海边城市玩要注意什么"}

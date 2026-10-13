@@ -66,6 +66,7 @@ class AgentReply:
     source: str
     citations: list[dict[str, Any]] = field(default_factory=list)
     tool_result: dict[str, Any] | None = None
+    tool_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -81,6 +82,7 @@ class _Prepared:
     history: list[Message] = field(default_factory=list)
     citations: list[dict[str, Any]] = field(default_factory=list)
     tool_result: dict[str, Any] | None = None
+    tool_name: str | None = None
     fixed_reply: str | None = None
 
 
@@ -126,6 +128,7 @@ class TravelAgent:
             prepared.source,
             citations=prepared.citations,
             tool_result=prepared.tool_result,
+            tool_name=prepared.tool_name,
         )
 
     # ---------- 对外：流式 ----------
@@ -162,6 +165,7 @@ class TravelAgent:
             "source": prepared.source,
             "citations": prepared.citations,
             "tool_result": prepared.tool_result,
+            "tool_name": prepared.tool_name,
         }
 
     # ---------- 内部 ----------
@@ -262,6 +266,7 @@ class TravelAgent:
             user=user,
             history=history,
             tool_result=result,
+            tool_name=tool_name,
         )
 
     async def _prepare_rag(

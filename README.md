@@ -133,6 +133,27 @@ pytest
 
 测试使用假 LLM，不会真实调用 API。
 
+## 评测
+
+`evals/` 下有一套评测用例与指标：
+
+```bash
+python -m evals.run_evals --offline   # 离线指标（不调用模型）
+python -m evals.run_evals             # 离线 + 在线指标（需要 API Key）
+python -m evals.run_evals --limit 3   # 在线部分每组只跑 3 条（省钱）
+```
+
+| 指标 | 是否需要模型 | 说明 |
+|------|:---:|------|
+| 规则意图覆盖 / 覆盖内准确率 | 否 | 快车道能覆盖多少、覆盖得对不对 |
+| 检索 Recall@1 / Recall@3 | 否 | 期望资料是否被召回 |
+| 整体意图准确率 | 是 | 含慢车道 |
+| 工具调用准确率 | 是 | 是否调用了正确的工具 |
+| 回答忠实度 | 是 | LLM 判官打分：是否只依据参考资料、不编造 |
+| 延迟 mean / p50 / p95 | 是 | 端到端耗时 |
+
+结果写入 `evals/report.json`。CI 会跑**离线评测**；`Evals` 工作流可手动触发**完整评测**（需配置 Secrets）。
+
 ## 部署（Docker）
 
 ```bash

@@ -39,6 +39,7 @@ class ChatResponse(BaseModel):
     source: str
     citations: list[dict[str, Any]] = Field(default_factory=list)
     tool_result: dict[str, Any] | None = None
+    tool_name: str | None = None
 
 
 @asynccontextmanager
@@ -103,6 +104,7 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         source=result.source,
         citations=result.citations,
         tool_result=result.tool_result,
+        tool_name=result.tool_name,
     )
 
 
