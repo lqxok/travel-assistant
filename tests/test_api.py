@@ -85,3 +85,56 @@ def test_non_ascii_token_can_match(fake_llm_factory):
             assert ok.status_code == 200
         finally:
             app.state.settings = original
+
+
+def test_demo_mode_skips_token(fake_llm_factory):
+    """演示模式：即使配置了口令，不带口令也应放行（供公网 demo 使用）。"""
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(["你好"] * 3), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(original, access_token="s3cret", demo_mode=True)
+        try:
+            assert client.post("/api/v1/chat", json={"message": "你好呀"}).status_code == 200
+            health = client.get("/api/v1/health").json()
+            assert health["demo_mode"] is True
+            assert health["auth_required"] is False  # 演示模式下不再需要口令
+        finally:
+            app.state.settings = original
+
+
+def test_demo_mode_daily_quota(fake_llm_factory):
+    """演示模式：超过每 IP 每日配额返回 429；首页与健康检查不计配额。"""
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(original, demo_mode=True, demo_daily_limit=2)
+        try:
+            assert client.post("/api/v1/chat", json={"message": "a"}).status_code == 200
+            assert client.post("/api/v1/chat", json={"message": "b"}).status_code == 200
+            # 第 3 次触发每日配额
+            assert client.post("/api/v1/chat", json={"message": "c"}).status_code == 429
+            # 首页与健康检查不受影响
+            assert client.get("/api/v1/health").status_code == 200
+            assert client.get("/").status_code == 200
+        finally:
+            app.state.settings = original
+
+
+def test_no_demo_mode_keeps_token_required(fake_llm_factory):
+    """未开演示模式时，口令校验照旧（防止误放行）。"""
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(["你好"] * 3), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(
+            original, access_token="s3cret", demo_mode=False, demo_daily_limit=2
+        )
+        try:
+            assert client.post("/api/v1/chat", json={"message": "你好呀"}).status_code == 401
+        finally:
+            app.state.settings = original

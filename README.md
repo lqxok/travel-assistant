@@ -14,6 +14,7 @@
 - **多轮会话**：传入相同 `session_id` 即带上历史对话，支持「那改成 5 天」这类追问。
 - **用户长期记忆**：按 `user_id` 记住稳定偏好/事实（如常驻城市、饮食忌口），**跨会话生效**并落盘保存。
 - **生产化**：每个请求分配**追踪 ID**（响应头 `X-Request-ID`，贯穿全部日志）；支持**结构化 JSON 日志**（`LOG_FORMAT=json`）；**接口限流**（滑动窗口，超限 429，健康检查豁免）。
+- **访问控制**：支持**访问口令**（`X-Access-Token`）保护接口；也可开启**演示模式**免口令对外开放，并用「每 IP 每日配额」把模型成本限死。
 
 ## 架构
 
@@ -80,6 +81,8 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | `OPENAI_MODEL` | 模型名 |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 生成参数 |
 | `ACCESS_TOKEN` | 访问口令；填了之后调用接口需带请求头 `X-Access-Token`（留空=不校验） |
+| `DEMO_MODE` | 演示模式：开启后**免口令**对外开放；会把 demo 状态写进 `/api/v1/health` |
+| `DEMO_DAILY_LIMIT` | 演示模式下每个 IP 每天的聊天次数上限，默认 20；设 `0` 不限 |
 | `EMBED_MODEL` | 语义检索模型，默认 `BAAI/bge-small-zh-v1.5`；填 `none` 关闭语义通道 |
 | `RERANK_MODEL` | 重排模型，默认 `BAAI/bge-reranker-base`；填 `none` 关闭重排（只用 RRF 融合） |
 | `HF_ENDPOINT` | HuggingFace 镜像地址，国内建议 `https://hf-mirror.com` |
@@ -88,6 +91,17 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 > 对外部署时建议设置 `ACCESS_TOKEN`，否则任何人拿到地址都能免费用你的模型额度。
 > 前端顶部有「口令」输入框；也可用 `http://<host>/?token=xxx` 打开一次（会自动记住）。
+
+**想放公网 demo（别人点开就能用）？** 开启演示模式即可：
+
+```bash
+DEMO_MODE=1
+DEMO_DAILY_LIMIT=20   # 每个 IP 每天最多 20 次聊天
+```
+
+演示模式下**不再校验口令**，但聊天接口按 **IP + 自然日** 计数，超出即返回 `429`；
+`/api/v1/health` 与首页不计入配额（容器探针与页面访问不受影响）。
+这样既能让人直接体验，又能把 API key 的成本**限死在每日上限内**。
 
 ## API
 

@@ -21,7 +21,12 @@ from app.agent import TravelAgent
 from app.config import Settings, load_settings
 from app.embedder import build_embedder, build_reranker
 from app.llm import LLMClient
-from app.observability import RateLimiter, request_id_var, setup_logging
+from app.observability import (
+    DEFAULT_DAILY_WINDOW_SECONDS,
+    RateLimiter,
+    request_id_var,
+    setup_logging,
+)
 from app.rag import KnowledgeBase
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,8 @@ async def lifespan(app: FastAPI):
     app.state.llm = llm
     app.state.agent = TravelAgent(llm, knowledge_base)
     app.state.rate_limiter = RateLimiter()
+    # 演示模式的「每 IP 每日」配额：窗口 24h，与分钟级限流分开
+    app.state.demo_limiter = RateLimiter(window=DEFAULT_DAILY_WINDOW_SECONDS)
     logger.info(
         "旅行助手启动，模型：%s，知识库：%d 条，语义检索：%s，重排：%s，限流：%d 次/分，日志：%s",
         settings.model,
@@ -66,6 +73,11 @@ async def lifespan(app: FastAPI):
         settings.rate_limit_per_minute,
         settings.log_format,
     )
+    if settings.demo_mode:
+        logger.warning(
+            "演示模式已开启：免口令公开调用，每 IP 每日上限 %s 次",
+            settings.demo_daily_limit or "不限",
+        )
     yield
 
 
@@ -82,26 +94,49 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # 健康检查是给容器探针用的，不参与限流，免得探针被自己拦掉
 _RATE_LIMIT_EXEMPT = {"/api/v1/health"}
 
+# 会产生大模型调用成本、需要单独计「每日配额」的接口
+_COST_PATHS = {"/api/v1/chat", "/api/v1/chat/stream"}
+
+
+def _too_many(detail: str, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": detail},
+        headers={"X-Request-ID": request_id},
+    )
+
 
 @app.middleware("http")
 async def observability_middleware(request: Request, call_next):
-    """给每个请求打上 request_id，做限流，并记录一条访问日志。"""
+    """给每个请求打上 request_id，做限流（分钟级 + 演示模式每日配额），并记录访问日志。"""
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
     request_id_var.set(request_id)
     settings: Settings | None = getattr(request.app.state, "settings", None)
     limiter: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    demo_limiter: RateLimiter | None = getattr(request.app.state, "demo_limiter", None)
 
-    if settings and limiter and settings.rate_limit_per_minute > 0:
-        client = request.client.host if request.client else "unknown"
-        # 只对业务接口限流；静态资源/首页/健康检查放行
-        if request.url.path.startswith("/api/") and request.url.path not in _RATE_LIMIT_EXEMPT:
-            if not limiter.allow(client, settings.rate_limit_per_minute):
-                logger.warning("触发限流：client=%s path=%s", client, request.url.path)
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "请求过于频繁，请稍后再试"},
-                    headers={"X-Request-ID": request_id},
-                )
+    client = request.client.host if request.client else "unknown"
+    is_business_api = (
+        request.url.path.startswith("/api/") and request.url.path not in _RATE_LIMIT_EXEMPT
+    )
+
+    # 分钟级限流：防突发刷接口
+    if settings and limiter and settings.rate_limit_per_minute > 0 and is_business_api:
+        if not limiter.allow(client, settings.rate_limit_per_minute):
+            logger.warning("触发限流：client=%s path=%s", client, request.url.path)
+            return _too_many("请求过于频繁，请稍后再试", request_id)
+
+    # 演示模式每日配额：只对会真正调用大模型的接口计数，防止 key 被长期白嫖
+    if (
+        settings
+        and settings.demo_mode
+        and settings.demo_daily_limit > 0
+        and demo_limiter
+        and request.url.path in _COST_PATHS
+    ):
+        if not demo_limiter.allow(client, settings.demo_daily_limit):
+            logger.warning("演示配额用尽：client=%s path=%s", client, request.url.path)
+            return _too_many("演示体验额度已用完，请明天再试", request_id)
 
     started = time.perf_counter()
     response = await call_next(request)
@@ -118,8 +153,13 @@ async def observability_middleware(request: Request, call_next):
 
 
 def require_token(request: Request) -> None:
-    """配置了 ACCESS_TOKEN 时校验访问口令（请求头 X-Access-Token 或 query ?token=）。"""
+    """校验访问口令（请求头 X-Access-Token 或 query ?token=）。
+
+    两种情况直接放行：未配置口令；或开启了演示模式（DEMO_MODE，靠每日配额控成本）。
+    """
     settings: Settings = request.app.state.settings
+    if settings.demo_mode:
+        return
     expected = settings.access_token
     if not expected:
         return  # 未配置口令 → 不校验
@@ -149,7 +189,9 @@ async def health(request: Request) -> dict[str, Any]:
         "vector": agent._kb.has_vector,
         "rerank": agent._kb.has_reranker,
         "profile_users": agent.profile_user_count,
-        "auth_required": bool(settings.access_token),
+        "auth_required": bool(settings.access_token) and not settings.demo_mode,
+        "demo_mode": settings.demo_mode,
+        "demo_daily_limit": settings.demo_daily_limit,
         "rate_limit_per_minute": settings.rate_limit_per_minute,
     }
 

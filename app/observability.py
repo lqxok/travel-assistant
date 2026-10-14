@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 DEFAULT_WINDOW_SECONDS = 60.0
+DEFAULT_DAILY_WINDOW_SECONDS = 86_400.0
 
 
 class RequestIdFilter(logging.Filter):

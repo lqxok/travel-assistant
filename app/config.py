@@ -29,11 +29,21 @@ class Settings:
     embed_model: str = DEFAULT_EMBED_MODEL
     rerank_model: str = DEFAULT_RERANK_MODEL
     rate_limit_per_minute: int = 60
+    demo_mode: bool = False
+    demo_daily_limit: int = 20
     log_format: str = "text"
 
     @property
     def has_api_key(self) -> bool:
         return bool(self.api_key)
+
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _as_bool(raw: str) -> bool:
+    """环境变量里的开关：1/true/yes/on 视为开，其余为关。"""
+    return raw.strip().lower() in _TRUE_VALUES
 
 
 def load_settings() -> Settings:
@@ -54,6 +64,10 @@ def load_settings() -> Settings:
         rerank_model=os.getenv("RERANK_MODEL", DEFAULT_RERANK_MODEL).strip(),
         # 每客户端每分鐘限流次数；设 0 关闭限流
         rate_limit_per_minute=int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")),
+        # 演示模式：开启后无需口令即可调用，但受「每 IP 每日次数」限制，避免 API key 被白嫖
+        demo_mode=_as_bool(os.getenv("DEMO_MODE", "")),
+        # 演示模式下每个 IP 每天的调用上限；设 0 表示不限
+        demo_daily_limit=int(os.getenv("DEMO_DAILY_LIMIT", "20")),
         # 日志格式：text（可读）/ json（结构化，便于采集）
         log_format=os.getenv("LOG_FORMAT", "text").strip().lower(),
     )
