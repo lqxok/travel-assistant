@@ -138,3 +138,41 @@ def test_no_demo_mode_keeps_token_required(fake_llm_factory):
             assert client.post("/api/v1/chat", json={"message": "你好呀"}).status_code == 401
         finally:
             app.state.settings = original
+
+
+def test_demo_mode_valid_token_bypasses_daily_quota(fake_llm_factory):
+    """演示模式下，带对管理员口令的请求不计每日配额（自己人不受限）。"""
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(
+            original, access_token="s3cret", demo_mode=True, demo_daily_limit=2
+        )
+        try:
+            headers = {"X-Access-Token": "s3cret"}
+            for _ in range(5):  # 远超每日配额，但带对口令 → 全部放行
+                resp = client.post("/api/v1/chat", json={"message": "hi"}, headers=headers)
+                assert resp.status_code == 200
+        finally:
+            app.state.settings = original
+
+
+def test_demo_mode_wrong_token_still_limited(fake_llm_factory):
+    """口令不对 → 仍按每日配额限制。"""
+    from dataclasses import replace
+
+    with TestClient(app) as client:
+        app.state.agent = TravelAgent(fake_llm_factory(), KnowledgeBase([]))
+        original = app.state.settings
+        app.state.settings = replace(
+            original, access_token="s3cret", demo_mode=True, demo_daily_limit=2
+        )
+        try:
+            headers = {"X-Access-Token": "wrong"}
+            assert client.post("/api/v1/chat", json={"message": "a"}, headers=headers).status_code == 200
+            assert client.post("/api/v1/chat", json={"message": "b"}, headers=headers).status_code == 200
+            assert client.post("/api/v1/chat", json={"message": "c"}, headers=headers).status_code == 429
+        finally:
+            app.state.settings = original

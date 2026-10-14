@@ -7,16 +7,10 @@ const newSessionBtn = document.getElementById("newSession");
 const clearMemoryBtn = document.getElementById("clearMemory");
 const tokenInput = document.getElementById("tokenInput");
 
-// 访问口令：可用 ?token=xxx 打开一次（会自动记住并清理地址栏）
+// 访问口令：默认留空（访客按每日限额使用，不做本地记忆）。
+// 用自己的口令打开 ?token=xxx 会自动填入并留在地址栏 —— 存成书签即可一键无限使用。
 const urlToken = new URLSearchParams(location.search).get("token");
-if (urlToken) {
-  localStorage.setItem("travel_token", urlToken);
-  history.replaceState(null, "", location.pathname);
-}
-tokenInput.value = localStorage.getItem("travel_token") || "";
-tokenInput.addEventListener("change", () => {
-  localStorage.setItem("travel_token", tokenInput.value.trim());
-});
+if (urlToken) tokenInput.value = urlToken;
 
 function authHeaders() {
   const token = (tokenInput.value || "").trim();

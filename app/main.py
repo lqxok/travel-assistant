@@ -126,17 +126,19 @@ async def observability_middleware(request: Request, call_next):
             logger.warning("触发限流：client=%s path=%s", client, request.url.path)
             return _too_many("请求过于频繁，请稍后再试", request_id)
 
-    # 演示模式每日配额：只对会真正调用大模型的接口计数，防止 key 被长期白嫖
+    # 演示模式每日配额：只对会真正调用大模型的接口计数，防止 key 被长期白嫖。
+    # 带对管理员口令的请求直接跳过配额（自己人不受限）。
     if (
         settings
         and settings.demo_mode
         and settings.demo_daily_limit > 0
         and demo_limiter
         and request.url.path in _COST_PATHS
+        and not _token_matches(request, settings.access_token)
     ):
         if not demo_limiter.allow(client, settings.demo_daily_limit):
             logger.warning("演示配额用尽：client=%s path=%s", client, request.url.path)
-            return _too_many("演示体验额度已用完，请明天再试", request_id)
+            return _too_many("演示体验额度已用完，请明天再试（填写口令可继续）", request_id)
 
     started = time.perf_counter()
     response = await call_next(request)
@@ -152,20 +154,29 @@ async def observability_middleware(request: Request, call_next):
     return response
 
 
+def _token_matches(request: Request, expected: str) -> bool:
+    """请求里带的口令是否与配置一致（请求头 X-Access-Token 或 query ?token=）。"""
+    if not expected:
+        return False
+    provided = request.headers.get("x-access-token") or request.query_params.get("token") or ""
+    if not provided:
+        return False
+    # 用 bytes 比较：compare_digest 不支持非 ASCII 字符串，直接比 str 会抛异常
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+
+
 def require_token(request: Request) -> None:
     """校验访问口令（请求头 X-Access-Token 或 query ?token=）。
 
-    两种情况直接放行：未配置口令；或开启了演示模式（DEMO_MODE，靠每日配额控成本）。
+    直接放行的两种情况：开启了演示模式（DEMO_MODE，公开可访问）；或未配置口令。
+    注意演示模式下口令仍然有用——**带对管理员口令的请求可豁免每日配额**（见中间件）。
     """
     settings: Settings = request.app.state.settings
     if settings.demo_mode:
         return
-    expected = settings.access_token
-    if not expected:
+    if not settings.access_token:
         return  # 未配置口令 → 不校验
-    provided = request.headers.get("x-access-token") or request.query_params.get("token") or ""
-    # 用 bytes 比较：compare_digest 不支持非 ASCII 字符串，直接比 str 会抛异常
-    if not secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+    if not _token_matches(request, settings.access_token):
         raise HTTPException(status_code=401, detail="访问口令无效或未提供")
 
 
