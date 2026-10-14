@@ -13,6 +13,7 @@
 - **Web 界面**：原生 HTML/CSS/JS 聊天界面，展示回答、意图标签与参考资料；支持**流式开关**与新建会话。
 - **多轮会话**：传入相同 `session_id` 即带上历史对话，支持「那改成 5 天」这类追问。
 - **用户长期记忆**：按 `user_id` 记住稳定偏好/事实（如常驻城市、饮食忌口），**跨会话生效**并落盘保存。
+- **生产化**：每个请求分配**追踪 ID**（响应头 `X-Request-ID`，贯穿全部日志）；支持**结构化 JSON 日志**（`LOG_FORMAT=json`）；**接口限流**（滑动窗口，超限 429，健康检查豁免）。
 
 ## 架构
 
@@ -49,6 +50,7 @@ travel-assistant/
 │   ├── embedder.py      # 本地向量/重排模型封装（fastembed，懒加载 + 降级）
 │   ├── tools.py         # 旅行工具（行程 / 预算）
 │   ├── agent.py         # 编排：意图 → 检索 / 工具 / 直接回答
+│   ├── observability.py # 请求追踪 ID / 结构化日志 / 限流
 │   ├── json_utils.py    # 稳健解析模型返回的 JSON
 │   └── static/          # 前端（index.html / styles.css / app.js）
 ├── data/knowledge.json  # 知识库语料
@@ -81,6 +83,8 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 | `EMBED_MODEL` | 语义检索模型，默认 `BAAI/bge-small-zh-v1.5`；填 `none` 关闭语义通道 |
 | `RERANK_MODEL` | 重排模型，默认 `BAAI/bge-reranker-base`；填 `none` 关闭重排（只用 RRF 融合） |
 | `HF_ENDPOINT` | HuggingFace 镜像地址，国内建议 `https://hf-mirror.com` |
+| `RATE_LIMIT_PER_MINUTE` | 每客户端每分钟限流次数，默认 60；设 `0` 关闭 |
+| `LOG_FORMAT` | 日志格式：`text`（可读）/ `json`（结构化） |
 
 > 对外部署时建议设置 `ACCESS_TOKEN`，否则任何人拿到地址都能免费用你的模型额度。
 > 前端顶部有「口令」输入框；也可用 `http://<host>/?token=xxx` 打开一次（会自动记住）。
@@ -121,7 +125,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ### `GET /api/v1/health`
 
-返回 `status`、`model`、`kb_size`、`vector` / `rerank`（两路是否启用）、`auth_required`。
+返回 `status`、`model`、`kb_size`、`vector` / `rerank`（两路是否启用）、`auth_required`、`rate_limit_per_minute`。
 
 ### `POST /api/v1/chat/stream`
 
@@ -163,6 +167,19 @@ python -m evals.run_evals --limit 3            # 在线部分每组只跑 3 条�
 | 延迟 mean / p50 / p95 | 是 | 端到端耗时 |
 
 结果写入 `evals/report.json`。CI 会跑**离线评测**；`Evals` 工作流可手动触发**完整评测**（需配置 Secrets）。
+
+## 生产化（可观测性与限流）
+
+- **请求追踪**：每个请求分配 `request_id`（也接受上游传入的 `X-Request-ID`），
+  放进 `ContextVar` 并写回响应头，于是**同一次请求的所有日志**都能通过它串起来。
+- **结构化日志**：`LOG_FORMAT=json` 时每条日志输出一行 JSON（`ts/level/logger/request_id/message`），
+  便于被 ELK、云日志直接采集；默认 `text` 便于本地调试。
+- **限流**：单实例内存中的**滑动窗口**计数器，按客户端 IP 限制每分钟请求数，超限返回 `429`；
+  `/api/v1/health` 豁免（供容器健康检查）。多实例部署时可换成 Redis 计数器。
+
+```bash
+LOG_FORMAT=json RATE_LIMIT_PER_MINUTE=120 uvicorn app.main:app --port 8000
+```
 
 ## 部署（Docker）
 

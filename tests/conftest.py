@@ -10,6 +10,8 @@ import pytest
 # 用 setdefault 的好处是：本地想验证真实模型时，显式设环境变量即可覆盖。
 os.environ.setdefault("EMBED_MODEL", "none")
 os.environ.setdefault("RERANK_MODEL", "none")
+# 测试里把限流阈值调高，避免测试请求互相触发 429（限流本身在 test_observability 单独验证）
+os.environ.setdefault("RATE_LIMIT_PER_MINUTE", "100000")
 
 
 class FakeLLM:

@@ -28,6 +28,8 @@ class Settings:
     access_token: str = ""
     embed_model: str = DEFAULT_EMBED_MODEL
     rerank_model: str = DEFAULT_RERANK_MODEL
+    rate_limit_per_minute: int = 60
+    log_format: str = "text"
 
     @property
     def has_api_key(self) -> bool:
@@ -50,4 +52,8 @@ def load_settings() -> Settings:
         embed_model=os.getenv("EMBED_MODEL", DEFAULT_EMBED_MODEL).strip(),
         # 重排模型；设为 none/off 可关闭（关闭后用 RRF 融合排序）
         rerank_model=os.getenv("RERANK_MODEL", DEFAULT_RERANK_MODEL).strip(),
+        # 每客户端每分鐘限流次数；设 0 关闭限流
+        rate_limit_per_minute=int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")),
+        # 日志格式：text（可读）/ json（结构化，便于采集）
+        log_format=os.getenv("LOG_FORMAT", "text").strip().lower(),
     )

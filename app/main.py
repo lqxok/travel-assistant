@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -19,12 +21,10 @@ from app.agent import TravelAgent
 from app.config import Settings, load_settings
 from app.embedder import build_embedder, build_reranker
 from app.llm import LLMClient
+from app.observability import RateLimiter, request_id_var, setup_logging
 from app.rag import KnowledgeBase
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+logger = logging.getLogger(__name__)
 
 
 class ChatRequest(BaseModel):
@@ -47,6 +47,7 @@ class ChatResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings: Settings = load_settings()
+    setup_logging(fmt=settings.log_format)  # 日志接入 request_id，可选 JSON 格式
     llm = LLMClient(settings)
     embedder = build_embedder(settings.embed_model)
     reranker = build_reranker(settings.rerank_model)
@@ -55,12 +56,15 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.llm = llm
     app.state.agent = TravelAgent(llm, knowledge_base)
-    logging.getLogger(__name__).info(
-        "旅行助手启动，模型：%s，知识库：%d 条，语义检索：%s，重排：%s",
+    app.state.rate_limiter = RateLimiter()
+    logger.info(
+        "旅行助手启动，模型：%s，知识库：%d 条，语义检索：%s，重排：%s，限流：%d 次/分，日志：%s",
         settings.model,
         knowledge_base.size,
         "开" if knowledge_base.has_vector else "关",
         "开" if knowledge_base.has_reranker else "关",
+        settings.rate_limit_per_minute,
+        settings.log_format,
     )
     yield
 
@@ -74,6 +78,43 @@ app = FastAPI(
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# 健康检查是给容器探针用的，不参与限流，免得探针被自己拦掉
+_RATE_LIMIT_EXEMPT = {"/api/v1/health"}
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    """给每个请求打上 request_id，做限流，并记录一条访问日志。"""
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+    request_id_var.set(request_id)
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    limiter: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+
+    if settings and limiter and settings.rate_limit_per_minute > 0:
+        client = request.client.host if request.client else "unknown"
+        # 只对业务接口限流；静态资源/首页/健康检查放行
+        if request.url.path.startswith("/api/") and request.url.path not in _RATE_LIMIT_EXEMPT:
+            if not limiter.allow(client, settings.rate_limit_per_minute):
+                logger.warning("触发限流：client=%s path=%s", client, request.url.path)
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "请求过于频繁，请稍后再试"},
+                    headers={"X-Request-ID": request_id},
+                )
+
+    started = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = (time.perf_counter() - started) * 1000
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "%s %s -> %d (%.1fms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+    )
+    return response
 
 
 def require_token(request: Request) -> None:
@@ -109,6 +150,7 @@ async def health(request: Request) -> dict[str, Any]:
         "rerank": agent._kb.has_reranker,
         "profile_users": agent.profile_user_count,
         "auth_required": bool(settings.access_token),
+        "rate_limit_per_minute": settings.rate_limit_per_minute,
     }
 
 
